@@ -27,6 +27,16 @@ const validators = {
     provider: Joi.string().valid("local", "google").optional(),
   }),
 
+  adminCreateUser: Joi.object({
+    name:       Joi.string().min(2).required(),
+    email:      Joi.string().email().required(),
+    phone:      Joi.string().optional(),
+    password:   Joi.string().min(8).required(),
+    role:       Joi.string().valid("customer", "employee", "admin").required(),
+    isVerified: Joi.boolean().optional(),
+    isActive:   Joi.boolean().optional(),
+  }),
+
   login: Joi.object({
     email:    Joi.string().email().required(),
     password: Joi.string().required(),
@@ -48,6 +58,22 @@ const validators = {
     isFragile:           Joi.boolean().optional(),
     specialInstructions: Joi.string().optional(),
   }),
+
+  updateShipment: Joi.object({
+    assignedTo:         Joi.string().hex().length(24).optional(),
+    origin:             locationSchema.optional(),
+    destination:        locationSchema.optional(),
+    description:        Joi.string().optional(),
+    packageType:        Joi.string().valid("document", "parcel", "pallet", "container").optional(),
+    weight:             Joi.number().positive().optional(),
+    dimensions:         Joi.object({ length: Joi.number(), width: Joi.number(), height: Joi.number() }).optional(),
+    quantity:           Joi.number().integer().min(1).optional(),
+    declaredValue:      Joi.number().min(0).optional(),
+    estimatedDelivery:  Joi.date().iso().optional(),
+    requiresCustoms:    Joi.boolean().optional(),
+    isFragile:          Joi.boolean().optional(),
+    specialInstructions:Joi.string().optional(),
+  }).min(1),
 
   logEvent: Joi.object({
     status: Joi.string()

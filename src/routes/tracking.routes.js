@@ -295,6 +295,122 @@ router.post("/shipments", authorize("admin", "employee"), validate(validators.cr
 
 /**
  * @swagger
+ * /shipments/{id}:
+ *   patch:
+ *     tags:
+ *       - Tracking
+ *     summary: Update shipment details
+ *     description: Update shipment details for an existing shipment (admin/employee only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: 507f1f77bcf86cd799439012
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               assignedTo:
+ *                 type: string
+ *                 example: 507f1f77bcf86cd799439013
+ *               origin:
+ *                 $ref: '#/components/schemas/Location'
+ *               destination:
+ *                 $ref: '#/components/schemas/Location'
+ *               description:
+ *                 type: string
+ *                 example: Updated description for the shipment
+ *               packageType:
+ *                 type: string
+ *                 enum: [document, parcel, pallet, container]
+ *               weight:
+ *                 type: number
+ *                 example: 456
+ *               dimensions:
+ *                 type: object
+ *                 properties:
+ *                   length:
+ *                     type: number
+ *                   width:
+ *                     type: number
+ *                   height:
+ *                     type: number
+ *               quantity:
+ *                 type: integer
+ *                 example: 10
+ *               declaredValue:
+ *                 type: number
+ *                 example: 5200
+ *               estimatedDelivery:
+ *                 type: string
+ *                 format: date-time
+ *               requiresCustoms:
+ *                 type: boolean
+ *                 example: true
+ *               isFragile:
+ *                 type: boolean
+ *                 example: false
+ *               specialInstructions:
+ *                 type: string
+ *                 example: Leave at reception if not available
+ *     responses:
+ *       200:
+ *         description: Shipment updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Shipment updated
+ *                 data:
+ *                   $ref: '#/components/schemas/Shipment'
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error400'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error401'
+ *       403:
+ *         description: Forbidden - admin/employee role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error403'
+ *       404:
+ *         description: Shipment not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error404'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error500'
+ */
+router.patch("/shipments/:id", authorize("admin", "employee"), validate(validators.updateShipment), ctrl.updateShipment);
+
+/**
+ * @swagger
  * /shipments/{id}/tracking:
  *   get:
  *     tags:

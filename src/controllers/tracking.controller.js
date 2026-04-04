@@ -95,6 +95,25 @@ async function createShipment(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// EMPLOYEE/ADMIN — update shipment details
+async function updateShipment(req, res, next) {
+  try {
+    const shipment = await trackingService.updateShipment(req.params.id, req.body);
+    if (!shipment) return respond(res, 404, false, "Shipment not found");
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "UPDATE_SHIPMENT",
+      targetModel: "Shipment",
+      targetId:    req.params.id,
+      details:     req.body,
+      ip:          req.ip,
+    });
+
+    return respond(res, 200, true, "Shipment updated", shipment);
+  } catch (err) { next(err); }
+}
+
 // ADMIN — dashboard stats
 async function getStats(req, res, next) {
   try {
@@ -104,4 +123,4 @@ async function getStats(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { publicTrack, internalTrack, logEvent, listShipments, myShipments, createShipment, getStats };
+module.exports = { publicTrack, internalTrack, logEvent, listShipments, myShipments, createShipment, updateShipment, getStats };

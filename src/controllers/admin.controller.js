@@ -34,6 +34,58 @@ async function listUsers(req, res, next) {
   } catch (err) { next(err); }
 }
 
+async function createUser(req, res, next) {
+  try {
+    const schema = Joi.object({
+      name:       Joi.string().min(2).required(),
+      email:      Joi.string().email().required(),
+      phone:      Joi.string().optional(),
+      password:   Joi.string().min(8).required(),
+      role:       Joi.string().valid("customer", "employee", "admin").required(),
+      isVerified: Joi.boolean().optional(),
+      isActive:   Joi.boolean().optional(),
+    });
+
+    const { error, value } = schema.validate(req.body, { abortEarly: false });
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: error.details.map((d) => d.message),
+      });
+    }
+
+    if (await User.findOne({ email: value.email })) {
+      return respond(res, 409, false, "Email already registered");
+    }
+
+    const user = await User.create({
+      name: value.name,
+      email: value.email,
+      phone: value.phone,
+      password: value.password,
+      role: value.role,
+      provider: "local",
+      isVerified: value.isVerified ?? false,
+      isActive: value.isActive ?? true,
+    });
+
+    const responseUser = user.toObject();
+    delete responseUser.password;
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "CREATE_USER",
+      targetModel: "User",
+      targetId:    user._id,
+      details:     { role: user.role },
+      ip:          req.ip,
+    });
+
+    return respond(res, 201, true, "User created", responseUser);
+  } catch (err) { next(err); }
+}
+
 async function updateUser(req, res, next) {
   try {
     const { id } = req.params;
@@ -103,4 +155,4 @@ async function getAuditLogs(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { listUsers, updateUser, getAuditLogs };
+module.exports = { listUsers, createUser, updateUser, getAuditLogs };

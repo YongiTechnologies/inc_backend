@@ -2,8 +2,104 @@ const express = require("express");
 const router  = express.Router();
 const ctrl    = require("../controllers/admin.controller");
 const { authenticate, authorize } = require("../middleware/auth.middleware");
+const { validate, validators } = require("../utils/validators");
 
 router.use(authenticate, authorize("admin"));
+
+/**
+ * @swagger
+ * /admin/users:
+ *   post:
+ *     tags:
+ *       - Admin
+ *     summary: Create a new user
+ *     description: Create a new user account with a specified role (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - password
+ *               - role
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: Kofi Mensah
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: kofi@ghanalogistics.com
+ *               phone:
+ *                 type: string
+ *                 example: "+233 26 123 4567"
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: Employee123!
+ *               role:
+ *                 type: string
+ *                 enum: [customer, employee, admin]
+ *                 example: employee
+ *               isVerified:
+ *                 type: boolean
+ *                 example: true
+ *               isActive:
+ *                 type: boolean
+ *                 example: true
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: User created
+ *                 data:
+ *                   $ref: '#/components/schemas/User'
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error400'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error401'
+ *       403:
+ *         description: Forbidden - admin role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error403'
+ *       409:
+ *         description: Email already registered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error409'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error500'
+ */
+router.post("/users", validate(validators.adminCreateUser), ctrl.createUser);
 
 /**
  * @swagger

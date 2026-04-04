@@ -136,6 +136,38 @@ async function createShipment(data, createdBy) {
   return shipment;
 }
 
+async function updateShipment(id, data) {
+  const allowedFields = [
+    "assignedTo",
+    "origin",
+    "destination",
+    "description",
+    "packageType",
+    "weight",
+    "dimensions",
+    "quantity",
+    "declaredValue",
+    "estimatedDelivery",
+    "requiresCustoms",
+    "isFragile",
+    "specialInstructions",
+  ];
+
+  const updateData = {};
+  allowedFields.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(data, field)) {
+      updateData[field] = data[field];
+    }
+  });
+
+  if (Object.keys(updateData).length === 0) return null;
+
+  return Shipment.findByIdAndUpdate(id, updateData, {
+    new: true,
+    runValidators: true,
+  }).populate("customerId", "name email phone").populate("assignedTo", "name email").lean();
+}
+
 /**
  * Paginated list with optional filters.
  */
@@ -264,6 +296,7 @@ module.exports = {
   getTrackingInternal,
   addTrackingEvent,
   createShipment,
+  updateShipment,
   listShipments,
   getStats,
   STATUS_TRANSITIONS,
