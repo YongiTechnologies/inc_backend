@@ -9,11 +9,12 @@ const swaggerUi = require("swagger-ui-express");
 
 const authRoutes     = require("./routes/auth.routes");
 const trackingRoutes = require("./routes/tracking.routes");
-const adminRoutes    = require("./routes/admin.routes");
-const gpsRoutes      = require("./routes/gps.routes");
+const adminRoutes     = require("./routes/admin.routes");
+const employeeRoutes  = require("./routes/employee.routes");
+const gpsRoutes       = require("./routes/gps.routes");
 const dashboardRoutes = require("./routes/dashboard.routes");
-const contactRoutes  = require("./routes/contact.routes");
-const oauthRoutes    = require("./routes/oauth.routes");
+const contactRoutes   = require("./routes/contact.routes");
+const oauthRoutes     = require("./routes/oauth.routes");
 const { errorHandler } = require("./middleware/errorHandler");
 const { respond }    = require("./utils/response");
 const swaggerSpec   = require("./config/swagger");
@@ -72,6 +73,7 @@ app.use("/api/auth",  oauthRoutes);
 app.use("/api",       trackingRoutes);
 app.use("/api",       gpsRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/employee", employeeRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api",       contactRoutes);
 
