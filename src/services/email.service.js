@@ -51,4 +51,47 @@ async function sendTrackingUpdate({ to, name, trackingNumber, statusLabel, locat
   });
 }
 
-module.exports = { sendTrackingUpdate };
+async function sendPasswordReset({ to, name, resetUrl }) {
+  if (!process.env.SMTP_USER) return; // skip if email not configured
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #1a1a1a;">Password Reset Request</h2>
+      <p>Hi ${name || "there"},</p>
+      <p>We received a request to reset your password. Click the button below to choose a new password.</p>
+      <p style="text-align: center; margin: 24px 0;"><a href="${resetUrl}" style="background: #1a73e8; color: #ffffff; padding: 12px 20px; text-decoration: none; border-radius: 4px;">Reset Password</a></p>
+      <p>If the button does not work, paste this link into your browser:</p>
+      <p style="word-break: break-all;"><a href="${resetUrl}">${resetUrl}</a></p>
+      <p style="color: #666; font-size: 13px;">If you did not request a password reset, you can safely ignore this email.</p>
+    </div>
+  `;
+
+  await getTransporter().sendMail({
+    from:    process.env.EMAIL_FROM || "Ghana Logistics Co. <no-reply@ghanalogistics.com>",
+    to,
+    subject: "Password Reset Instructions",
+    html,
+  });
+}
+
+async function sendPasswordChanged({ to, name }) {
+  if (!process.env.SMTP_USER) return;
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #1a1a1a;">Password Changed</h2>
+      <p>Hi ${name || "there"},</p>
+      <p>Your account password has been changed successfully.</p>
+      <p>If you did not make this change, please contact support immediately.</p>
+    </div>
+  `;
+
+  await getTransporter().sendMail({
+    from:    process.env.EMAIL_FROM || "Ghana Logistics Co. <no-reply@ghanalogistics.com>",
+    to,
+    subject: "Your password has been changed",
+    html,
+  });
+}
+
+module.exports = { sendTrackingUpdate, sendPasswordReset, sendPasswordChanged };

@@ -42,6 +42,16 @@ const validators = {
     password: Joi.string().required(),
   }),
 
+  forgotPassword: Joi.object({
+    email: Joi.string().email().required(),
+  }),
+
+  resetPassword: Joi.object({
+    email: Joi.string().email().required(),
+    token: Joi.string().required(),
+    password: Joi.string().min(8).required(),
+  }),
+
   createShipment: Joi.object({
     trackingNumber:      Joi.string().min(3).max(50).required(),
     customerId:          Joi.string().hex().length(24).required(),

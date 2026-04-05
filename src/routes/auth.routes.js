@@ -182,6 +182,116 @@ router.post("/login", validate(validators.login), ctrl.login);
 
 /**
  * @swagger
+ * /auth/forgot-password:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Request a password reset email
+ *     description: Send a password reset email if the user account exists.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: john@example.com
+ *     responses:
+ *       200:
+ *         description: Password reset email sent if email exists
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: If an account exists, a password reset email has been sent.
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error400'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error500'
+ */
+router.post("/forgot-password", validate(validators.forgotPassword), ctrl.forgotPassword);
+
+/**
+ * @swagger
+ * /auth/reset-password:
+ *   post:
+ *     tags:
+ *       - Auth
+ *     summary: Reset password with token
+ *     description: Reset the user's password using the token from the password reset email.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - token
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: john@example.com
+ *               token:
+ *                 type: string
+ *                 example: d3adb33f...
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *                 format: password
+ *                 example: NewSecurePass123!
+ *     responses:
+ *       200:
+ *         description: Password reset successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Password has been reset successfully.
+ *       400:
+ *         description: Validation error or invalid reset token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error400'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error500'
+ */
+router.post("/reset-password", validate(validators.resetPassword), ctrl.resetPassword);
+
+/**
+ * @swagger
  * /auth/refresh:
  *   post:
  *     tags:

@@ -18,6 +18,8 @@ const userSchema = new mongoose.Schema(
     googleId: { type: String, sparse: true, index: true },
     provider: { type: String, enum: ["local", "google"], default: "local" },
     avatar: { type: String }, // Google profile photo URL
+    passwordResetToken: { type: String, select: false },
+    passwordResetExpires: { type: Date },
   },
   { timestamps: true }
 );

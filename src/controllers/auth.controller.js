@@ -1,5 +1,7 @@
+const crypto = require("crypto");
 const User = require("../models/User");
 const RefreshToken = require("../models/RefreshToken");
+const emailService = require("../services/email.service");
 const { signAccess, signRefresh, verifyRefresh } = require("../utils/jwt");
 const { respond } = require("../utils/response");
 const audit = require("../services/audit.service");
@@ -64,6 +66,63 @@ async function login(req, res, next) {
   } catch (err) { next(err); }
 }
 
+async function forgotPassword(req, res, next) {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email }).select("+email +name");
+
+    if (user) {
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const passwordResetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+      const passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+      user.passwordResetToken = passwordResetToken;
+      user.passwordResetExpires = passwordResetExpires;
+      await user.save({ validateBeforeSave: false });
+
+      const frontendUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get("host")}`;
+      const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
+      await emailService.sendPasswordReset({
+        to: user.email,
+        name: user.name,
+        resetUrl,
+      });
+    }
+
+    return respond(res, 200, true, "If an account exists, a password reset email has been sent.");
+  } catch (err) { next(err); }
+}
+
+async function resetPassword(req, res, next) {
+  try {
+    const { email, token, password } = req.body;
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+    const user = await User.findOne({
+      email,
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: new Date() },
+    }).select("+password +passwordResetToken");
+
+    if (!user) {
+      return respond(res, 400, false, "Invalid or expired password reset token.");
+    }
+
+    user.password = password;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    await emailService.sendPasswordChanged({
+      to: user.email,
+      name: user.name,
+    });
+
+    await audit.log({ performedBy: user._id, action: "PASSWORD_RESET", ip: req.ip });
+
+    return respond(res, 200, true, "Password has been reset successfully.");
+  } catch (err) { next(err); }
+}
+
 async function refresh(req, res, next) {
   try {
     const token = req.cookies?.refreshToken;
@@ -112,4 +171,4 @@ async function me(req, res) {
   });
 }
 
-module.exports = { register, login, refresh, logout, me };
+module.exports = { register, login, forgotPassword, resetPassword, refresh, logout, me };
