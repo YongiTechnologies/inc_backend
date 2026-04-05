@@ -4,8 +4,6 @@ const ctrl    = require("../controllers/admin.controller");
 const { authenticate, authorize } = require("../middleware/auth.middleware");
 const { validate, validators } = require("../utils/validators");
 
-router.use(authenticate, authorize("admin"));
-
 /**
  * @swagger
  * /admin/users:
@@ -99,7 +97,7 @@ router.use(authenticate, authorize("admin"));
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/users", validate(validators.adminCreateUser), ctrl.createUser);
+router.post("/users", authenticate, authorize("admin"), validate(validators.adminCreateUser), ctrl.createUser);
 
 /**
  * @swagger
@@ -108,7 +106,7 @@ router.post("/users", validate(validators.adminCreateUser), ctrl.createUser);
  *     tags:
  *       - Admin
  *     summary: List all users
- *     description: Retrieve paginated list of users with optional filters (admin only)
+ *     description: Retrieve paginated list of users with optional filters (admin and employee)
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -178,7 +176,7 @@ router.post("/users", validate(validators.adminCreateUser), ctrl.createUser);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.get("/users", ctrl.listUsers);
+router.get("/users", authenticate, authorize(["admin", "employee"]), ctrl.listUsers);
 
 /**
  * @swagger
@@ -266,7 +264,7 @@ router.get("/users", ctrl.listUsers);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.patch("/users/:id", ctrl.updateUser);
+router.patch("/users/:id", authenticate, authorize("admin"), ctrl.updateUser);
 
 /**
  * @swagger
@@ -334,6 +332,6 @@ router.patch("/users/:id", ctrl.updateUser);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.get("/audit-logs", ctrl.getAuditLogs);
+router.get("/audit-logs", authenticate, authorize("admin"), ctrl.getAuditLogs);
 
 module.exports = router;
