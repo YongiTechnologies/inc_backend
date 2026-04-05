@@ -176,7 +176,7 @@ router.post("/users", authenticate, authorize("admin"), validate(validators.admi
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.get("/users", authenticate, authorize(["admin", "employee"]), ctrl.listUsers);
+router.get("/users", authenticate, authorize("admin", "employee"), ctrl.listUsers);
 
 /**
  * @swagger

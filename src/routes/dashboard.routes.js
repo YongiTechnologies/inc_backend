@@ -92,7 +92,7 @@ router.get("/customer/stats", authenticate, authorize("customer"), ctrl.getCusto
  *       403:
  *         description: Forbidden - not an employee or admin
  */
-router.get("/employee/stats", authenticate, authorize(["employee", "admin"]), ctrl.getEmployeeStats);
+router.get("/employee/stats", authenticate, authorize("employee", "admin"), ctrl.getEmployeeStats);
 
 /**
  * @swagger
@@ -229,6 +229,6 @@ router.get("/admin/stats", authenticate, authorize("admin"), ctrl.getAdminStats)
  *       403:
  *         description: Forbidden - not an employee or admin
  */
-router.get("/employees/customers/search", authenticate, authorize(["employee", "admin"]), ctrl.searchCustomers);
+router.get("/employees/customers/search", authenticate, authorize("employee", "admin"), ctrl.searchCustomers);
 
 module.exports = router;
