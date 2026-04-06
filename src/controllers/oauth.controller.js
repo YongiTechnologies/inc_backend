@@ -43,7 +43,7 @@ async function googleCallback(req, res, next) {
 
     // Redirect to frontend with access token as query param
     const frontendURL = process.env.FRONTEND_URL || "http://localhost:3000";
-    res.redirect(`${frontendURL}/auth/callback?token=${accessToken}&role=${user.role}`);
+    res.redirect(`${frontendURL}/auth/google/callback?token=${accessToken}&role=${user.role}`);
 
   } catch (err) {
     next(err);
