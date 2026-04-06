@@ -8,9 +8,10 @@ const audit = require("../services/audit.service");
 
 const COOKIE_OPTS = {
   httpOnly: true,
-  secure:   process.env.NODE_ENV === "production",
-  sameSite: "strict",
-  maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
+  secure: true, // Always true for cross-origin HTTPS
+  sameSite: "none", // Required for cross-origin cookies
+  path: "/",
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 
 async function register(req, res, next) {
