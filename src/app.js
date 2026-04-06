@@ -15,6 +15,7 @@ const gpsRoutes       = require("./routes/gps.routes");
 const dashboardRoutes = require("./routes/dashboard.routes");
 const contactRoutes   = require("./routes/contact.routes");
 const oauthRoutes     = require("./routes/oauth.routes");
+const batchRoutes     = require("./routes/batch.routes");
 const { errorHandler } = require("./middleware/errorHandler");
 const { respond }    = require("./utils/response");
 const swaggerSpec   = require("./config/swagger");
@@ -68,14 +69,15 @@ if (process.env.NODE_ENV !== "production" || process.env.SWAGGER_ENABLED === "tr
 // app.use("/api/contact", contact);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
-app.use("/api/auth",  authRoutes);
-app.use("/api/auth",  oauthRoutes);
-app.use("/api",       trackingRoutes);
-app.use("/api",       gpsRoutes);
-app.use("/api/admin", adminRoutes);
+app.use("/api/auth",     authRoutes);
+app.use("/api/auth",     oauthRoutes);
+app.use("/api",          trackingRoutes);
+app.use("/api",          gpsRoutes);
+app.use("/api/admin",    adminRoutes);
 app.use("/api/employee", employeeRoutes);
-app.use("/api/dashboard", dashboardRoutes);
-app.use("/api",       contactRoutes);
+app.use("/api/dashboard",dashboardRoutes);
+app.use("/api",          contactRoutes);
+app.use("/api",          batchRoutes);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
