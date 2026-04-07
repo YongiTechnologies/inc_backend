@@ -5,19 +5,17 @@ const audit        = require("../services/audit.service");
 const {
   parseIntakeSheet,
   parseShippedSheet,
-  parseArrivedSheet,
   processIntakeBatch,
   processShippedBatch,
-  processArrivedBatch,
   normalisePhone,
 } = require("../services/batch.service");
 const { respond } = require("../utils/response");
 
-// Public-safe projection — strips internal staff-only fields
+// Fields stripped before returning data to public/customer callers
 const PUBLIC_ITEM_SELECT =
-  "-staffNotes -fees -customerId -heldReason -reassignedTo -stageHistory";
+  "-staffNotes -customerId -heldReason -reassignedTo -stageHistory";
 
-// ─── File validation helper ───────────────────────────────────────────────────
+// ─── File validation ──────────────────────────────────────────────────────────
 
 function validateFile(req, res) {
   if (!req.file) {
@@ -72,28 +70,6 @@ async function uploadShipped(req, res, next) {
       ip:          req.ip,
     });
     return respond(res, 201, true, "Shipped batch processed successfully", result);
-  } catch (err) {
-    if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
-    next(err);
-  }
-}
-
-async function uploadArrived(req, res, next) {
-  if (!validateFile(req, res)) return;
-  let batch;
-  try {
-    const parsed = parseArrivedSheet(req.file.buffer);
-    const result = await processArrivedBatch(parsed, req.user._id);
-    batch = result.batch;
-    await audit.log({
-      performedBy: req.user._id,
-      action:      "BATCH_ARRIVED_UPLOAD",
-      targetModel: "Batch",
-      targetId:    batch._id,
-      details:     { batchCode: batch.batchCode, totalItems: batch.totalItems, heldItems: batch.heldItems },
-      ip:          req.ip,
-    });
-    return respond(res, 201, true, "Arrived batch processed successfully", result);
   } catch (err) {
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
     next(err);
@@ -177,8 +153,7 @@ async function getBatchItems(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Staff: global list of ALL batch shipment items ───────────────────────────
-// This is the batch-domain equivalent of GET /api/shipments for employees/admins.
+// ─── Staff: all batch items (global list) ─────────────────────────────────────
 
 async function listAllItems(req, res, next) {
   try {
@@ -211,8 +186,7 @@ async function listAllItems(req, res, next) {
         .limit(Math.min(parseInt(limit), 100))
         .populate("customerId",  "name email phone")
         .populate("intakeBatch",  "batchCode stage createdAt")
-        .populate("shippedBatch", "batchCode stage createdAt")
-        .populate("arrivedBatch", "batchCode stage createdAt"),
+        .populate("shippedBatch", "batchCode stage createdAt"),
       ShipmentItem.countDocuments(filter),
     ]);
 
@@ -228,17 +202,13 @@ async function listAllItems(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Customer: their OWN batch shipment items ─────────────────────────────────
-// Matched by customerId (set at upload) OR by phone number on their User account.
-// Used on the customer dashboard alongside the existing /api/shipments/mine.
+// ─── Customer: their own batch items ─────────────────────────────────────────
 
 async function getMyBatchItems(req, res, next) {
   try {
     const { page = 1, limit = 20, status } = req.query;
     const user = req.user;
 
-    // Match items linked to this user account, OR items whose phone matches theirs
-    // (covers the case where the item was uploaded before they registered)
     const orConditions = [{ customerId: user._id }];
     if (user.phone) {
       const norm = normalisePhone(user.phone);
@@ -255,13 +225,11 @@ async function getMyBatchItems(req, res, next) {
         .limit(Math.min(parseInt(limit), 50))
         .select(PUBLIC_ITEM_SELECT)
         .populate("intakeBatch",  "batchCode stage createdAt")
-        .populate("shippedBatch", "batchCode stage createdAt")
-        .populate("arrivedBatch", "batchCode stage createdAt"),
+        .populate("shippedBatch", "batchCode stage createdAt"),
       ShipmentItem.countDocuments(filter),
     ]);
 
-    // Group by status for easy frontend dashboard rendering
-    const grouped = { in_warehouse: [], shipped: [], arrived: [], held: [] };
+    const grouped = { in_warehouse: [], shipped: [], held: [] };
     items.forEach((item) => {
       if (grouped[item.status]) grouped[item.status].push(item);
     });
@@ -332,7 +300,7 @@ async function reassignHeldItem(req, res, next) {
     if (!targetBatch) return respond(res, 404, false, "Target batch not found");
     if (item.status !== "held") return respond(res, 400, false, "Item is not in held status");
 
-    const stageStatusMap = { intake: "in_warehouse", shipped: "shipped", arrived: "arrived" };
+    const stageStatusMap = { intake: "in_warehouse", shipped: "shipped" };
     const newStatus      = stageStatusMap[targetBatch.stage] || "in_warehouse";
     const batchField     = `${targetBatch.stage}Batch`;
 
@@ -362,7 +330,7 @@ async function reassignHeldItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Update item (staff manual correction) ────────────────────────────────────
+// ─── Update item (staff correction) ──────────────────────────────────────────
 
 async function updateItem(req, res, next) {
   try {
@@ -371,14 +339,22 @@ async function updateItem(req, res, next) {
 
     const ALLOWED_FIELDS = [
       "customerName",
+      "customerPhone",
       "destinationCity",
       "productDescription",
-      "staffNotes",
-      "customerPhone",
+      "goodsType",
       "invoiceNo",
       "quantity",
       "cbm",
       "containerRef",
+      "freightTerm",
+      "freightAmount",
+      "loan",
+      "interest",
+      "otherFee",
+      "invoiceAmount",
+      "remarks",
+      "staffNotes",
     ];
 
     const updates = {};
@@ -393,7 +369,7 @@ async function updateItem(req, res, next) {
       );
     }
 
-    // If phone is being updated, re-normalise and re-link to a User account
+    // Re-normalise phone and re-link to User account if phone is being updated
     if (updates.customerPhone !== undefined) {
       const User       = require("../models/User");
       const normalised = normalisePhone(updates.customerPhone);
@@ -422,7 +398,7 @@ async function updateItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Public tracking endpoints ─────────────────────────────────────────────────
+// ─── Public tracking (NO auth required) ──────────────────────────────────────
 
 async function lookupByPhone(req, res, next) {
   try {
@@ -433,12 +409,13 @@ async function lookupByPhone(req, res, next) {
       .sort({ updatedAt: -1 })
       .select(PUBLIC_ITEM_SELECT)
       .populate("intakeBatch",  "batchCode stage createdAt")
-      .populate("shippedBatch", "batchCode stage createdAt")
-      .populate("arrivedBatch", "batchCode stage createdAt");
+      .populate("shippedBatch", "batchCode stage createdAt");
 
-    if (!items.length) return respond(res, 404, false, "No shipments found for this phone number");
+    if (!items.length) {
+      return respond(res, 404, false, "No shipments found for this phone number");
+    }
 
-    const grouped = { in_warehouse: [], shipped: [], arrived: [], held: [] };
+    const grouped = { in_warehouse: [], shipped: [], held: [] };
     items.forEach((item) => {
       if (grouped[item.status]) grouped[item.status].push(item);
     });
@@ -453,8 +430,7 @@ async function lookupByWaybill(req, res, next) {
     const item    = await ShipmentItem.findOne({ waybillNo: waybill })
       .select(PUBLIC_ITEM_SELECT)
       .populate("intakeBatch",  "batchCode stage createdAt")
-      .populate("shippedBatch", "batchCode stage createdAt")
-      .populate("arrivedBatch", "batchCode stage createdAt");
+      .populate("shippedBatch", "batchCode stage createdAt");
 
     if (!item) return respond(res, 404, false, "Waybill not found");
     return respond(res, 200, true, "Item retrieved", item);
@@ -464,7 +440,6 @@ async function lookupByWaybill(req, res, next) {
 module.exports = {
   uploadIntake,
   uploadShipped,
-  uploadArrived,
   listBatches,
   getBatch,
   getBatchItems,

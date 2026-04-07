@@ -13,57 +13,66 @@ const stageHistorySchema = new mongoose.Schema(
 
 const shipmentItemSchema = new mongoose.Schema(
   {
-    // Core identifiers
-    waybillNo:          { type: String, required: true, index: true, uppercase: true, trim: true },
-    invoiceNo:          { type: String },
+    // ── Core identifiers ──────────────────────────────────────────────────────
+    waybillNo:  { type: String, required: true, index: true, uppercase: true, trim: true },
+    invoiceNo:  { type: String }, // bag/bundle number from intake sheet
 
-    // Customer
-    customerPhone:      { type: String, index: true },   // normalised (233XXXXXXXXX)
-    customerPhoneRaw:   { type: String },
-    customerId:         { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
-    customerName:       { type: String },
+    // ── Customer ──────────────────────────────────────────────────────────────
+    customerPhone:    { type: String, index: true }, // normalised: 233XXXXXXXXX
+    customerPhoneRaw: { type: String },              // original from sheet
+    customerId:       { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    customerName:     { type: String },              // CNEE NAME from packing list
 
-    // Logistics
+    // ── Logistics ─────────────────────────────────────────────────────────────
     destinationCity:    { type: String },
+    goodsType:          { type: String },            // CARTON, CARTONS, etc.
     quantity:           { type: Number },
-    quantityRaw:        { type: String },
-    cbm:                { type: Number },
-    productDescription: { type: String },
-    containerRef:       { type: String },
-    fees:               { type: String },
+    quantityRaw:        { type: String },            // original string e.g. "13pallet"
+    cbm:                { type: Number },            // cubic metres
+    productDescription: { type: String },            // DESCRIPTION from packing list
+    containerRef:       { type: String },            // container number e.g. "MSBU7337022"
+    remarks:            { type: String },            // e.g. "FORK FEE 100"
 
-    // Status
+    // ── Financial fields (from CTR_INVOICE / packing list) ────────────────────
+    freightTerm:   { type: String  }, // COLLECT O/F AMOUNT label e.g. "COLLECT"
+    freightAmount: { type: Number  }, // PAYMENT TERM $ value
+    loan:          { type: Number  },
+    interest:      { type: Number  },
+    otherFee:      { type: Number  },
+    invoiceAmount: { type: Number  }, // total invoice amount
+
+    // ── Status ────────────────────────────────────────────────────────────────
+    // Two stages only: in_warehouse (intake) → shipped (packing list)
+    // Items missing from packing list → held
     status: {
-      type: String,
-      enum: ["in_warehouse", "shipped", "arrived", "held"],
+      type:    String,
+      enum:    ["in_warehouse", "shipped", "held"],
       default: "in_warehouse",
     },
 
-    // Batch references
-    intakeBatch:   { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
-    shippedBatch:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
-    arrivedBatch:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
+    // ── Batch references ──────────────────────────────────────────────────────
+    intakeBatch:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
+    shippedBatch: { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
 
-    // Dates from sheets
-    intakeDate:    { type: Date },
-    receivingDate: { type: Date },
+    // ── Dates ─────────────────────────────────────────────────────────────────
+    intakeDate:    { type: Date }, // date from intake sheet
+    receivingDate: { type: Date }, // LOADING DATE from packing list
 
-    // History
-    stageHistory:  [stageHistorySchema],
+    // ── History ───────────────────────────────────────────────────────────────
+    stageHistory: [stageHistorySchema],
 
-    // Staff fields
-    heldReason:    { type: String },
-    reassignedTo:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
-    staffNotes:    { type: String },
+    // ── Staff-managed fields ──────────────────────────────────────────────────
+    heldReason:   { type: String },
+    reassignedTo: { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
+    staffNotes:   { type: String }, // internal only — never returned to customers
   },
   { timestamps: true }
 );
 
 // Compound indexes for common queries
 shipmentItemSchema.index({ customerPhone: 1, status: 1 });
-shipmentItemSchema.index({ intakeBatch: 1, status: 1 });
+shipmentItemSchema.index({ intakeBatch:  1, status: 1 });
 shipmentItemSchema.index({ shippedBatch: 1, status: 1 });
-shipmentItemSchema.index({ arrivedBatch: 1, status: 1 });
 shipmentItemSchema.index({ status: 1, updatedAt: -1 });
 
 module.exports = mongoose.model("ShipmentItem", shipmentItemSchema);
