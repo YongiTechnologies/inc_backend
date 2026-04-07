@@ -424,4 +424,5 @@ module.exports = {
   updateItem,
   lookupByPhone,
   lookupByWaybill,
+  getAllShipments,
 };
