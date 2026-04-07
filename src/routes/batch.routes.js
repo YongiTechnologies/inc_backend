@@ -179,4 +179,34 @@ router.get("/tracking/phone/:phone",     publicLimiter, ctrl.lookupByPhone);
  */
 router.get("/tracking/waybill/:waybill", publicLimiter, ctrl.lookupByWaybill);
 
+// ─── Unified shipments list ───────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /shipments/all:
+ *   get:
+ *     tags: [Batches]
+ *     summary: List all shipments (batch items) for dashboard
+ *     security: [{bearerAuth: []}]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [in_warehouse, shipped, arrived, held]
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ */
+router.get("/shipments/all", ...staffOnly, ctrl.getAllShipments);
+
 module.exports = router;

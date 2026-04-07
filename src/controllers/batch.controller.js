@@ -344,6 +344,74 @@ async function lookupByWaybill(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// ─── Unified shipments list (Shipment + ShipmentItem) ─────────────────────────
+
+/**
+ * GET /api/shipments/all
+ * Returns both Shipment documents and ShipmentItem documents in a unified format.
+ * For employee/admin dashboard use.
+ */
+async function getAllShipments(req, res, next) {
+  try {
+    const { page = 1, limit = 50, status, search } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100);
+
+    // Fetch ShipmentItem records (from batch system)
+    const itemFilter = {};
+    if (status) itemFilter.status = status;
+    if (search) {
+      itemFilter.$or = [
+        { waybillNo: { $regex: search, $options: "i" } },
+        { invoiceNo: { $regex: search, $options: "i" } },
+        { customerPhone: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const [shipmentItems, itemTotal] = await Promise.all([
+      ShipmentItem.find(itemFilter)
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .populate("customerId", "name email phone"),
+      ShipmentItem.countDocuments(itemFilter),
+    ]);
+
+    // Transform ShipmentItem to match Shipment response format
+    const unifiedItems = shipmentItems.map((item) => ({
+      _id: item._id,
+      trackingNumber: item.waybillNo,
+      description: item.productDescription || "Batch shipment item",
+      origin: { address: "China", city: "", country: "China" },
+      destination: {
+        address: "",
+        city: item.destinationCity || "",
+        country: "Ghana",
+      },
+      status: item.status,
+      customerId: item.customerId,
+      customerName: item.customerName,
+      customerPhone: item.customerPhoneRaw || item.customerPhone,
+      estimatedDelivery: item.arrivedBatch ? new Date() : null,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      source: "batch", // indicate this is from batch system
+    }));
+
+    return respond(res, 200, true, "All shipments retrieved", {
+      items: unifiedItems,
+      pagination: {
+        total: itemTotal,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(itemTotal / limitNum),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   uploadIntake,
   uploadShipped,
