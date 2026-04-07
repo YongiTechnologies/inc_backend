@@ -38,12 +38,11 @@ async function getCustomerStats(req, res, next) {
       if (norm) orConditions.push({ customerPhone: norm });
     }
 
-    const [batchTotal, batchInWarehouse, batchShipped, batchArrived, batchHeld] =
+    const [batchTotal, batchInWarehouse, batchShipped, batchHeld] =
       await Promise.all([
         ShipmentItem.countDocuments({ $or: orConditions }),
         ShipmentItem.countDocuments({ $or: orConditions, status: "in_warehouse" }),
         ShipmentItem.countDocuments({ $or: orConditions, status: "shipped" }),
-        ShipmentItem.countDocuments({ $or: orConditions, status: "arrived" }),
         ShipmentItem.countDocuments({ $or: orConditions, status: "held" }),
       ]);
 
@@ -60,14 +59,13 @@ async function getCustomerStats(req, res, next) {
         total:       batchTotal,
         inWarehouse: batchInWarehouse,
         shipped:     batchShipped,
-        arrived:     batchArrived,
         held:        batchHeld,
       },
       // Combined quick summary for a simple dashboard counter
       summary: {
         totalItems:  individualTotal + batchTotal,
         inTransit:   individualInTransit + batchShipped,
-        delivered:   individualDelivered + batchArrived,
+        delivered:   individualDelivered,
       },
     });
   } catch (err) { next(err); }
