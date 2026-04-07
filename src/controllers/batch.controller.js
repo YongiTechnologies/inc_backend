@@ -1,7 +1,7 @@
-const path     = require("path");
-const Batch    = require("../models/Batch");
+const path         = require("path");
+const Batch        = require("../models/Batch");
 const ShipmentItem = require("../models/ShipmentItem");
-const audit    = require("../services/audit.service");
+const audit        = require("../services/audit.service");
 const {
   parseIntakeSheet,
   parseShippedSheet,
@@ -13,11 +13,15 @@ const {
 } = require("../services/batch.service");
 const { respond } = require("../utils/response");
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// Public-safe projection — strips internal staff-only fields
+const PUBLIC_ITEM_SELECT =
+  "-staffNotes -fees -customerId -heldReason -reassignedTo -stageHistory";
+
+// ─── File validation helper ───────────────────────────────────────────────────
 
 function validateFile(req, res) {
   if (!req.file) {
-    respond(res, 400, false, "No file uploaded. Use field name 'file'.");
+    respond(res, 400, false, "No file uploaded. Use multipart field name 'file'.");
     return false;
   }
   const ext = path.extname(req.file.originalname).toLowerCase();
@@ -28,19 +32,7 @@ function validateFile(req, res) {
   return true;
 }
 
-/** Strip internal fields before returning public item data */
-function publicItem(item) {
-  const obj = item.toObject ? item.toObject() : { ...item };
-  delete obj.staffNotes;
-  delete obj.fees;
-  delete obj.customerId;
-  delete obj.stageHistory;
-  delete obj.heldReason;
-  delete obj.reassignedTo;
-  return obj;
-}
-
-// ─── Upload handlers ───────────────────────────────────────────────────────────
+// ─── Upload endpoints ─────────────────────────────────────────────────────────
 
 async function uploadIntake(req, res, next) {
   if (!validateFile(req, res)) return;
@@ -49,7 +41,6 @@ async function uploadIntake(req, res, next) {
     const parsed = parseIntakeSheet(req.file.buffer);
     const result = await processIntakeBatch(parsed, req.user._id);
     batch = result.batch;
-
     await audit.log({
       performedBy: req.user._id,
       action:      "BATCH_INTAKE_UPLOAD",
@@ -58,10 +49,8 @@ async function uploadIntake(req, res, next) {
       details:     { batchCode: batch.batchCode, totalItems: batch.totalItems },
       ip:          req.ip,
     });
-
     return respond(res, 201, true, "Intake batch processed successfully", result);
   } catch (err) {
-    // Rollback batch if created
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
     next(err);
   }
@@ -74,7 +63,6 @@ async function uploadShipped(req, res, next) {
     const parsed = parseShippedSheet(req.file.buffer);
     const result = await processShippedBatch(parsed, req.user._id);
     batch = result.batch;
-
     await audit.log({
       performedBy: req.user._id,
       action:      "BATCH_SHIPPED_UPLOAD",
@@ -83,7 +71,6 @@ async function uploadShipped(req, res, next) {
       details:     { batchCode: batch.batchCode, totalItems: batch.totalItems, heldItems: batch.heldItems },
       ip:          req.ip,
     });
-
     return respond(res, 201, true, "Shipped batch processed successfully", result);
   } catch (err) {
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
@@ -98,7 +85,6 @@ async function uploadArrived(req, res, next) {
     const parsed = parseArrivedSheet(req.file.buffer);
     const result = await processArrivedBatch(parsed, req.user._id);
     batch = result.batch;
-
     await audit.log({
       performedBy: req.user._id,
       action:      "BATCH_ARRIVED_UPLOAD",
@@ -107,7 +93,6 @@ async function uploadArrived(req, res, next) {
       details:     { batchCode: batch.batchCode, totalItems: batch.totalItems, heldItems: batch.heldItems },
       ip:          req.ip,
     });
-
     return respond(res, 201, true, "Arrived batch processed successfully", result);
   } catch (err) {
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
@@ -115,7 +100,7 @@ async function uploadArrived(req, res, next) {
   }
 }
 
-// ─── Batch queries ─────────────────────────────────────────────────────────────
+// ─── Batch list & detail ──────────────────────────────────────────────────────
 
 async function listBatches(req, res, next) {
   try {
@@ -134,7 +119,12 @@ async function listBatches(req, res, next) {
 
     return respond(res, 200, true, "Batches retrieved", {
       batches,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
+      pagination: {
+        total,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     });
   } catch (err) { next(err); }
 }
@@ -144,11 +134,9 @@ async function getBatch(req, res, next) {
     const batch = await Batch.findById(req.params.id).populate("uploadedBy", "name email");
     if (!batch) return respond(res, 404, false, "Batch not found");
 
-    // Get item counts by status for this batch
-    const batchId = batch._id;
-    const stageField = `${batch.stage}Batch`;
+    const stageField   = `${batch.stage}Batch`;
     const statusCounts = await ShipmentItem.aggregate([
-      { $match: { [stageField]: batchId } },
+      { $match: { [stageField]: batch._id } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
     const byStatus = {};
@@ -165,7 +153,7 @@ async function getBatchItems(req, res, next) {
     if (!batch) return respond(res, 404, false, "Batch not found");
 
     const stageField = `${batch.stage}Batch`;
-    const filter = { [stageField]: batch._id };
+    const filter     = { [stageField]: batch._id };
     if (status) filter.status = status;
 
     const [items, total] = await Promise.all([
@@ -179,7 +167,114 @@ async function getBatchItems(req, res, next) {
 
     return respond(res, 200, true, "Batch items retrieved", {
       items,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
+      pagination: {
+        total,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+// ─── Staff: global list of ALL batch shipment items ───────────────────────────
+// This is the batch-domain equivalent of GET /api/shipments for employees/admins.
+
+async function listAllItems(req, res, next) {
+  try {
+    const { page = 1, limit = 20, status, search, phone } = req.query;
+    const filter = {};
+
+    if (status) filter.status = status;
+
+    if (phone) {
+      const norm = normalisePhone(phone);
+      if (norm) filter.customerPhone = norm;
+    }
+
+    if (search) {
+      const esc = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { waybillNo:        { $regex: esc, $options: "i" } },
+        { invoiceNo:        { $regex: esc, $options: "i" } },
+        { customerName:     { $regex: esc, $options: "i" } },
+        { destinationCity:  { $regex: esc, $options: "i" } },
+        { containerRef:     { $regex: esc, $options: "i" } },
+        { customerPhoneRaw: { $regex: esc, $options: "i" } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      ShipmentItem.find(filter)
+        .sort({ updatedAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(Math.min(parseInt(limit), 100))
+        .populate("customerId",  "name email phone")
+        .populate("intakeBatch",  "batchCode stage createdAt")
+        .populate("shippedBatch", "batchCode stage createdAt")
+        .populate("arrivedBatch", "batchCode stage createdAt"),
+      ShipmentItem.countDocuments(filter),
+    ]);
+
+    return respond(res, 200, true, "Shipment items retrieved", {
+      items,
+      pagination: {
+        total,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (err) { next(err); }
+}
+
+// ─── Customer: their OWN batch shipment items ─────────────────────────────────
+// Matched by customerId (set at upload) OR by phone number on their User account.
+// Used on the customer dashboard alongside the existing /api/shipments/mine.
+
+async function getMyBatchItems(req, res, next) {
+  try {
+    const { page = 1, limit = 20, status } = req.query;
+    const user = req.user;
+
+    // Match items linked to this user account, OR items whose phone matches theirs
+    // (covers the case where the item was uploaded before they registered)
+    const orConditions = [{ customerId: user._id }];
+    if (user.phone) {
+      const norm = normalisePhone(user.phone);
+      if (norm) orConditions.push({ customerPhone: norm });
+    }
+
+    const filter = { $or: orConditions };
+    if (status) filter.status = status;
+
+    const [items, total] = await Promise.all([
+      ShipmentItem.find(filter)
+        .sort({ updatedAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(Math.min(parseInt(limit), 50))
+        .select(PUBLIC_ITEM_SELECT)
+        .populate("intakeBatch",  "batchCode stage createdAt")
+        .populate("shippedBatch", "batchCode stage createdAt")
+        .populate("arrivedBatch", "batchCode stage createdAt"),
+      ShipmentItem.countDocuments(filter),
+    ]);
+
+    // Group by status for easy frontend dashboard rendering
+    const grouped = { in_warehouse: [], shipped: [], arrived: [], held: [] };
+    items.forEach((item) => {
+      if (grouped[item.status]) grouped[item.status].push(item);
+    });
+
+    return respond(res, 200, true, "Your shipment items retrieved", {
+      total,
+      grouped,
+      pagination: {
+        total,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     });
   } catch (err) { next(err); }
 }
@@ -192,8 +287,8 @@ async function getHeldItems(req, res, next) {
     const filter = { status: "held" };
 
     if (phone) {
-      const normalised = normalisePhone(phone);
-      if (normalised) filter.customerPhone = normalised;
+      const norm = normalisePhone(phone);
+      if (norm) filter.customerPhone = norm;
     }
     if (waybill) {
       filter.waybillNo = { $regex: waybill.trim().toUpperCase(), $options: "i" };
@@ -204,21 +299,26 @@ async function getHeldItems(req, res, next) {
         .sort({ updatedAt: -1 })
         .skip((parseInt(page) - 1) * parseInt(limit))
         .limit(parseInt(limit))
-        .populate("intakeBatch", "batchCode stage createdAt")
+        .populate("intakeBatch",  "batchCode stage createdAt")
         .populate("shippedBatch", "batchCode stage createdAt"),
       ShipmentItem.countDocuments(filter),
     ]);
 
     return respond(res, 200, true, "Held items retrieved", {
       items,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
+      pagination: {
+        total,
+        page:  parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit)),
+      },
     });
   } catch (err) { next(err); }
 }
 
 async function reassignHeldItem(req, res, next) {
   try {
-    const { itemId } = req.params;
+    const { itemId }              = req.params;
     const { targetBatchId, note } = req.body;
 
     if (!targetBatchId) return respond(res, 400, false, "targetBatchId is required");
@@ -232,7 +332,6 @@ async function reassignHeldItem(req, res, next) {
     if (!targetBatch) return respond(res, 404, false, "Target batch not found");
     if (item.status !== "held") return respond(res, 400, false, "Item is not in held status");
 
-    // Map batch stage to appropriate status
     const stageStatusMap = { intake: "in_warehouse", shipped: "shipped", arrived: "arrived" };
     const newStatus      = stageStatusMap[targetBatch.stage] || "in_warehouse";
     const batchField     = `${targetBatch.stage}Batch`;
@@ -248,7 +347,6 @@ async function reassignHeldItem(req, res, next) {
       updatedAt: new Date(),
       note:      note || `Manually reassigned to batch ${targetBatch.batchCode} by staff`,
     });
-
     await item.save();
 
     await audit.log({
@@ -264,23 +362,40 @@ async function reassignHeldItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Item update ───────────────────────────────────────────────────────────────
+// ─── Update item (staff manual correction) ────────────────────────────────────
 
 async function updateItem(req, res, next) {
   try {
     const item = await ShipmentItem.findById(req.params.itemId);
     if (!item) return respond(res, 404, false, "Item not found");
 
-    const allowed = ["customerName", "destinationCity", "productDescription", "staffNotes", "customerPhone"];
-    const updates = {};
+    const ALLOWED_FIELDS = [
+      "customerName",
+      "destinationCity",
+      "productDescription",
+      "staffNotes",
+      "customerPhone",
+      "invoiceNo",
+      "quantity",
+      "cbm",
+      "containerRef",
+    ];
 
-    for (const field of allowed) {
+    const updates = {};
+    for (const field of ALLOWED_FIELDS) {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     }
 
-    // Re-run phone normalisation if phone is being updated
-    if (updates.customerPhone) {
-      const User = require("../models/User");
+    if (Object.keys(updates).length === 0) {
+      return respond(
+        res, 400, false,
+        `No valid fields provided. Updatable fields: ${ALLOWED_FIELDS.join(", ")}`
+      );
+    }
+
+    // If phone is being updated, re-normalise and re-link to a User account
+    if (updates.customerPhone !== undefined) {
+      const User       = require("../models/User");
       const normalised = normalisePhone(updates.customerPhone);
       updates.customerPhone    = normalised;
       updates.customerPhoneRaw = req.body.customerPhone;
@@ -307,7 +422,7 @@ async function updateItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Public tracking ───────────────────────────────────────────────────────────
+// ─── Public tracking endpoints ─────────────────────────────────────────────────
 
 async function lookupByPhone(req, res, next) {
   try {
@@ -316,16 +431,16 @@ async function lookupByPhone(req, res, next) {
 
     const items = await ShipmentItem.find({ customerPhone: normalised })
       .sort({ updatedAt: -1 })
-      .select("-staffNotes -fees -customerId -stageHistory -heldReason -reassignedTo");
+      .select(PUBLIC_ITEM_SELECT)
+      .populate("intakeBatch",  "batchCode stage createdAt")
+      .populate("shippedBatch", "batchCode stage createdAt")
+      .populate("arrivedBatch", "batchCode stage createdAt");
 
     if (!items.length) return respond(res, 404, false, "No shipments found for this phone number");
 
-    // Group by status
     const grouped = { in_warehouse: [], shipped: [], arrived: [], held: [] };
     items.forEach((item) => {
-      const group = grouped[item.status] || [];
-      group.push(item);
-      grouped[item.status] = group;
+      if (grouped[item.status]) grouped[item.status].push(item);
     });
 
     return respond(res, 200, true, "Shipments retrieved", { total: items.length, grouped });
@@ -336,80 +451,14 @@ async function lookupByWaybill(req, res, next) {
   try {
     const waybill = req.params.waybill.trim().toUpperCase();
     const item    = await ShipmentItem.findOne({ waybillNo: waybill })
-      .select("-staffNotes -fees -customerId -stageHistory -heldReason -reassignedTo");
+      .select(PUBLIC_ITEM_SELECT)
+      .populate("intakeBatch",  "batchCode stage createdAt")
+      .populate("shippedBatch", "batchCode stage createdAt")
+      .populate("arrivedBatch", "batchCode stage createdAt");
 
     if (!item) return respond(res, 404, false, "Waybill not found");
-
     return respond(res, 200, true, "Item retrieved", item);
   } catch (err) { next(err); }
-}
-
-// ─── Unified shipments list (Shipment + ShipmentItem) ─────────────────────────
-
-/**
- * GET /api/shipments/all
- * Returns both Shipment documents and ShipmentItem documents in a unified format.
- * For employee/admin dashboard use.
- */
-async function getAllShipments(req, res, next) {
-  try {
-    const { page = 1, limit = 50, status, search } = req.query;
-    const pageNum = parseInt(page);
-    const limitNum = Math.min(parseInt(limit), 100);
-
-    // Fetch ShipmentItem records (from batch system)
-    const itemFilter = {};
-    if (status) itemFilter.status = status;
-    if (search) {
-      itemFilter.$or = [
-        { waybillNo: { $regex: search, $options: "i" } },
-        { invoiceNo: { $regex: search, $options: "i" } },
-        { customerPhone: { $regex: search, $options: "i" } },
-      ];
-    }
-
-    const [shipmentItems, itemTotal] = await Promise.all([
-      ShipmentItem.find(itemFilter)
-        .sort({ createdAt: -1 })
-        .skip((pageNum - 1) * limitNum)
-        .limit(limitNum)
-        .populate("customerId", "name email phone"),
-      ShipmentItem.countDocuments(itemFilter),
-    ]);
-
-    // Transform ShipmentItem to match Shipment response format
-    const unifiedItems = shipmentItems.map((item) => ({
-      _id: item._id,
-      trackingNumber: item.waybillNo,
-      description: item.productDescription || "Batch shipment item",
-      origin: { address: "China", city: "", country: "China" },
-      destination: {
-        address: "",
-        city: item.destinationCity || "",
-        country: "Ghana",
-      },
-      status: item.status,
-      customerId: item.customerId,
-      customerName: item.customerName,
-      customerPhone: item.customerPhoneRaw || item.customerPhone,
-      estimatedDelivery: item.arrivedBatch ? new Date() : null,
-      createdAt: item.createdAt,
-      updatedAt: item.updatedAt,
-      source: "batch", // indicate this is from batch system
-    }));
-
-    return respond(res, 200, true, "All shipments retrieved", {
-      items: unifiedItems,
-      pagination: {
-        total: itemTotal,
-        page: pageNum,
-        limit: limitNum,
-        pages: Math.ceil(itemTotal / limitNum),
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
 }
 
 module.exports = {
@@ -419,10 +468,11 @@ module.exports = {
   listBatches,
   getBatch,
   getBatchItems,
+  listAllItems,
+  getMyBatchItems,
   getHeldItems,
   reassignHeldItem,
   updateItem,
   lookupByPhone,
   lookupByWaybill,
-  getAllShipments,
 };
