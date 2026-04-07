@@ -435,10 +435,35 @@ async function processShippedBatch(parsedData, uploadedBy) {
   };
 }
 
+/**
+ * Look up shipment items by phone number.
+ */
+async function lookupByPhone(normalised) {
+  const items = await ShipmentItem.find({ customerPhone: normalised })
+    .sort({ updatedAt: -1 })
+    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory")
+    .populate("intakeBatch", "batchCode stage createdAt")
+    .populate("shippedBatch", "batchCode stage createdAt");
+  return items;
+}
+
+/**
+ * Look up a shipment item by waybill number.
+ */
+async function lookupByWaybill(waybill) {
+  const item = await ShipmentItem.findOne({ waybillNo: waybill })
+    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory")
+    .populate("intakeBatch", "batchCode stage createdAt")
+    .populate("shippedBatch", "batchCode stage createdAt");
+  return item;
+}
+
 module.exports = {
   parseIntakeSheet,
   parseShippedSheet,
   processIntakeBatch,
   processShippedBatch,
   normalisePhone,
+  lookupByPhone,
+  lookupByWaybill,
 };

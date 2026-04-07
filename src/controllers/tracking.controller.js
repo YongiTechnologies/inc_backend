@@ -1,4 +1,5 @@
 const trackingService = require("../services/tracking.service");
+const batchService = require("../services/batch.service");
 const audit = require("../services/audit.service");
 const { respond } = require("../utils/response");
 
@@ -8,6 +9,36 @@ async function publicTrack(req, res, next) {
     const data = await trackingService.getTrackingByNumber(req.params.trackingNumber.toUpperCase());
     if (!data) return respond(res, 404, false, "Tracking number not found. Please check and try again.");
     return respond(res, 200, true, "Tracking info retrieved", data);
+  } catch (err) { next(err); }
+}
+
+async function publicTrackByPhone(req, res, next) {
+  try {
+    const normalised = batchService.normalisePhone(req.params.phone);
+    if (!normalised) return respond(res, 400, false, "Invalid phone number");
+
+    const items = await batchService.lookupByPhone(normalised);
+
+    if (!items.length) {
+      return respond(res, 404, false, "No shipments found for this phone number");
+    }
+
+    const grouped = { in_warehouse: [], shipped: [], held: [] };
+    items.forEach((item) => {
+      if (grouped[item.status]) grouped[item.status].push(item);
+    });
+
+    return respond(res, 200, true, "Shipments retrieved", { total: items.length, grouped });
+  } catch (err) { next(err); }
+}
+
+async function publicTrackByWaybill(req, res, next) {
+  try {
+    const waybill = req.params.waybill.trim().toUpperCase();
+    const item = await batchService.lookupByWaybill(waybill);
+
+    if (!item) return respond(res, 404, false, "Waybill not found");
+    return respond(res, 200, true, "Item retrieved", item);
   } catch (err) { next(err); }
 }
 
@@ -123,4 +154,4 @@ async function getStats(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { publicTrack, internalTrack, logEvent, listShipments, myShipments, createShipment, updateShipment, getStats };
+module.exports = { publicTrack, publicTrackByPhone, publicTrackByWaybill, internalTrack, logEvent, listShipments, myShipments, createShipment, updateShipment, getStats };

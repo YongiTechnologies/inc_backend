@@ -3,6 +3,14 @@ const router  = express.Router();
 const ctrl    = require("../controllers/tracking.controller");
 const { authenticate, authorize } = require("../middleware/auth.middleware");
 const { validate, validators }    = require("../utils/validators");
+const rateLimit = require("express-rate-limit");
+
+// Rate limiter for public tracking endpoints
+const publicLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max:      30,
+  message:  { success: false, message: "Too many requests. Please wait a moment." },
+});
 
 /**
  * @swagger
@@ -57,6 +65,83 @@ const { validate, validators }    = require("../utils/validators");
  *               $ref: '#/components/schemas/Error500'
  */
 router.get("/tracking/:trackingNumber", ctrl.publicTrack);
+
+/**
+ * @swagger
+ * /tracking/phone/{phone}:
+ *   get:
+ *     tags: [Public Tracking]
+ *     summary: Look up all batch shipment items for a phone number (public, no login required)
+ *     description: >
+ *       No authentication required. Accepts any Ghanaian phone format —
+ *       0XXXXXXXXX, +233XXXXXXXXX, 233XXXXXXXXX, or bare 9-digit.
+ *       Returns items grouped by status. Rate-limited to 30 req/min.
+ *     parameters:
+ *       - in: path
+ *         name: phone
+ *         required: true
+ *         schema: { type: string }
+ *         example: "0200485487"
+ *         description: "Phone number in any format: 0244123456 / +233244123456 / 233244123456"
+ *     responses:
+ *       200:
+ *         description: Items found grouped by status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string, example: "Shipments retrieved" }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     total: { type: integer }
+ *                     grouped:
+ *                       type: object
+ *                       properties:
+ *                         in_warehouse: { type: array, items: { type: object } }
+ *                         shipped:      { type: array, items: { type: object } }
+ *                         held:         { type: array, items: { type: object } }
+ *       400:
+ *         description: Invalid phone number
+ *       404:
+ *         description: No shipments found for this phone number
+ *       429:
+ *         description: Rate limit exceeded
+ */
+router.get("/tracking/phone/:phone", publicLimiter, ctrl.publicTrackByPhone);
+
+/**
+ * @swagger
+ * /tracking/waybill/{waybill}:
+ *   get:
+ *     tags: [Public Tracking]
+ *     summary: Look up a single item by waybill/job number (public, no login required)
+ *     description: Case-insensitive exact match. Rate-limited to 30 req/min.
+ *     parameters:
+ *       - in: path
+ *         name: waybill
+ *         required: true
+ *         schema: { type: string }
+ *         example: "1C202668306141"
+ *     responses:
+ *       200:
+ *         description: Item found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string, example: "Item retrieved" }
+ *                 data: { type: object }
+ *       404:
+ *         description: Waybill not found
+ *       429:
+ *         description: Rate limit exceeded
+ */
+router.get("/tracking/waybill/:waybill", publicLimiter, ctrl.publicTrackByWaybill);
 
 /**
  * @swagger
