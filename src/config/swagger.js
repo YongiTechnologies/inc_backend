@@ -74,7 +74,7 @@ const options = {
             },
             email: {
               type: "string",
-              example: "kofi@ghanalogistics.com",
+              example: "kofi@inclogistics.com",
             },
             phone: {
               type: "string",
@@ -392,7 +392,7 @@ const options = {
               },
               example: {
                 name: "Kofi Mensah",
-                email: "kofi@ghanalogistics.com",
+                email: "kofi@inclogistics.com",
                 role: "employee",
               },
             },

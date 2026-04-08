@@ -286,7 +286,7 @@ async function maybeAutoLogEvent(itemId, ping, device) {
     if (["delivered", "returned"].includes(item.status)) return;
 
     // Get system user for automated events
-    const systemUser = await User.findOne({ email: "system@ghanalogistics.com" });
+    const systemUser = await User.findOne({ email: "system@inclogistics.com" });
     if (!systemUser) {
       console.error("System user not found for GPS auto-logging");
       return;

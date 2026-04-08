@@ -79,7 +79,7 @@ pending → picked_up → in_transit → customs → out_for_delivery → delive
 | Variable         | Required | Description                              |
 |------------------|----------|------------------------------------------|
 | MONGODB_URI      | ✅       | MongoDB connection string                |
-| DB_NAME          | ✅       | Database name (default: ghana_logistics) |
+| DB_NAME          | ✅       | Database name (default: inc_logistics) |
 | JWT_SECRET       | ✅       | Access token secret (min 64 chars)       |
 | JWT_REFRESH_SECRET | ✅    | Refresh token secret (min 64 chars)      |
 | JWT_EXPIRES_IN   |          | Access token TTL (default: 15m)          |
@@ -154,7 +154,7 @@ All responses follow:
 ## Project Structure
 
 ```
-ghana-logistics-backend/
+inc-logistics-backend/
 ├── server.js                  # Entry point
 ├── src/
 │   ├── app.js                 # Express setup, middleware, routes

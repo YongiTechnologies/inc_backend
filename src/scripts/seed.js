@@ -18,9 +18,9 @@ async function seed() {
 
   // ─── Users ────────────────────────────────────────────────────────────────
   const [admin, employee, system, customer] = await User.create([
-    { name: "Admin User",    email: "admin@ghanalogistics.com",    password: "Admin1234!", role: "admin",    isVerified: true },
-    { name: "Kofi Mensah",   email: "kofi@ghanalogistics.com",     password: "Employee1!", role: "employee", isVerified: true },
-    { name: "System",        email: "system@ghanalogistics.com",   password: "System123!", role: "employee", isVerified: true },
+    { name: "Admin User",    email: "admin@inclogistics.com",    password: "Admin1234!", role: "admin",    isVerified: true },
+    { name: "Kofi Mensah",   email: "kofi@inclogistics.com",     password: "Employee1!", role: "employee", isVerified: true },
+    { name: "System",        email: "system@inclogistics.com",   password: "System123!", role: "employee", isVerified: true },
     { name: "Ama Owusu",     email: "ama@example.com",             password: "Customer1!", role: "customer", isVerified: true },
   ]);
   console.log("✅ Users created");
@@ -81,8 +81,8 @@ async function seed() {
     { status: "picked_up",        location: { address: "Guangzhou Wholesale Market", city: "Guangzhou", country: "China" }, note: "Collected from supplier.",            carrier: "China Post", daysAgo: 8 },
     { status: "in_transit",       location: { address: "Kotoka Intl Airport",        city: "Accra",     country: "Ghana" }, note: "Arrived in Ghana.",                   carrier: "Kenya Airways Cargo", daysAgo: 4 },
     { status: "customs",          location: { address: "Tema Port",                  city: "Tema",      country: "Ghana" }, note: "Customs cleared.",                    daysAgo: 3 },
-    { status: "in_transit",       location: { address: "Accra Main Hub",             city: "Accra",     country: "Ghana" }, note: "Dispatched to Kumasi.",               carrier: "Ghana Logistics Co.", daysAgo: 1 },
-    { status: "out_for_delivery", location: { address: "Kumasi Hub",                 city: "Kumasi",    country: "Ghana" }, note: "With delivery rider.",                carrier: "Ghana Logistics Co.", hoursAgo: 7 },
+    { status: "in_transit",       location: { address: "Accra Main Hub",             city: "Accra",     country: "Ghana" }, note: "Dispatched to Kumasi.",               carrier: "I&C Logistics Co.", daysAgo: 1 },
+    { status: "out_for_delivery", location: { address: "Kumasi Hub",                 city: "Kumasi",    country: "Ghana" }, note: "With delivery rider.",                carrier: "I&C Logistics Co.", hoursAgo: 7 },
     { status: "delivered",        location: { address: "Kejetia Market",             city: "Kumasi",    country: "Ghana" }, note: "Package delivered. Received by Maame Ama.", hoursAgo: 5 },
   ];
 
@@ -162,8 +162,8 @@ async function seed() {
 
   console.log("✅ ShipmentItems created");
   console.log("\n🔑 Login credentials:");
-  console.log("   Admin:    admin@ghanalogistics.com   / Admin1234!");
-  console.log("   Employee: kofi@ghanalogistics.com    / Employee1!");
+  console.log("   Admin:    admin@inclogistics.com   / Admin1234!");
+  console.log("   Employee: kofi@inclogistics.com    / Employee1!");
   console.log("   Customer: ama@example.com            / Customer1!");
   console.log(`\n📦 Tracking numbers:`);
   console.log(`   ${item1.waybillNo} (Customs)`);
