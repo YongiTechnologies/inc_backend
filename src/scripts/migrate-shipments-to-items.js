@@ -18,8 +18,18 @@
 
 require("dotenv").config();
 const mongoose = require("mongoose");
-const Shipment = require("../models/Shipment");
-const TrackingEvent = require("../models/TrackingEvent");
+
+// Check if old models still exist (for re-running migration)
+let Shipment, TrackingEvent;
+try {
+  Shipment = require("../models/Shipment");
+  TrackingEvent = require("../models/TrackingEvent");
+} catch (err) {
+  console.log("Old models (Shipment/TrackingEvent) not found - migration already completed or models removed.");
+  console.log("This script can only be run if the old models exist.");
+  process.exit(0);
+}
+
 const ShipmentItem = require("../models/ShipmentItem");
 const User = require("../models/User");
 
