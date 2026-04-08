@@ -46,102 +46,107 @@ async function publicTrackByWaybill(req, res, next) {
 async function internalTrack(req, res, next) {
   try {
     const data = await trackingService.getTrackingInternal(req.params.id);
-    if (!data) return respond(res, 404, false, "Shipment not found");
+    if (!data) return respond(res, 404, false, "Shipment item not found");
     return respond(res, 200, true, "Tracking detail retrieved", data);
   } catch (err) { next(err); }
 }
 
-// EMPLOYEE/ADMIN — log a checkpoint
-async function logEvent(req, res, next) {
+// EMPLOYEE/ADMIN — update item status (replaces logEvent)
+async function updateItemStatus(req, res, next) {
   try {
-    const event = await trackingService.addTrackingEvent({
-      shipmentId:       req.params.id,
-      updatedBy:        req.user._id,
-      ...req.body,
+    const item = await trackingService.updateItemStatus({
+      itemId:         req.params.id,
+      updatedBy:      req.user._id,
+      status:         req.body.status,
+      location:       req.body.location,
+      note:           req.body.note,
+      internalNote:   req.body.internalNote,
+      carrier:        req.body.carrier,
+      carrierReference: req.body.carrierReference,
     });
 
     await audit.log({
       performedBy: req.user._id,
-      action:      "LOG_TRACKING_EVENT",
-      targetModel: "Shipment",
+      action:      "UPDATE_ITEM_STATUS",
+      targetModel: "ShipmentItem",
       targetId:    req.params.id,
       details:     { status: req.body.status, location: req.body.location },
       ip:          req.ip,
     });
 
-    return respond(res, 201, true, "Tracking event logged", event);
+    return respond(res, 200, true, "Item status updated", item);
   } catch (err) {
-    if (err.message.includes("Invalid transition") || err.message === "Shipment not found") {
+    if (err.message.includes("Invalid transition") || err.message === "ShipmentItem not found") {
       return respond(res, 422, false, err.message);
     }
     next(err);
   }
 }
 
-// EMPLOYEE/ADMIN — list shipments
-async function listShipments(req, res, next) {
+// EMPLOYEE/ADMIN — list items
+async function listItems(req, res, next) {
   try {
     const { page = 1, limit = 20, status, search } = req.query;
-    const result = await trackingService.listShipments({
+    const result = await trackingService.listShipmentItems({
       page:   parseInt(page),
       limit:  Math.min(parseInt(limit), 100),
       status,
       search,
     });
-    return respond(res, 200, true, "Shipments retrieved", result);
+    return respond(res, 200, true, "Shipment items retrieved", result);
   } catch (err) { next(err); }
 }
 
-// CUSTOMER — own shipments
-async function myShipments(req, res, next) {
+// CUSTOMER — own items
+async function myItems(req, res, next) {
   try {
     const { page = 1, limit = 20 } = req.query;
-    const result = await trackingService.listShipments({
+    const result = await trackingService.listShipmentItems({
       page:       parseInt(page),
       limit:      Math.min(parseInt(limit), 50),
       customerId: req.user._id,
     });
-    return respond(res, 200, true, "Your shipments", result);
+    return respond(res, 200, true, "Your shipment items", result);
   } catch (err) { next(err); }
 }
 
-// EMPLOYEE/ADMIN — create shipment
-async function createShipment(req, res, next) {
+// EMPLOYEE/ADMIN — create item manually
+async function createItem(req, res, next) {
   try {
-    const shipment = await trackingService.createShipment(req.body, req.user._id);
+    const item = await trackingService.createShipmentItem(req.body, req.user._id);
 
     await audit.log({
       performedBy: req.user._id,
-      action:      "CREATE_SHIPMENT",
-      targetModel: "Shipment",
-      targetId:    shipment._id,
-      details:     { trackingNumber: shipment.trackingNumber },
+      action:      "CREATE_SHIPMENT_ITEM",
+      targetModel: "ShipmentItem",
+      targetId:    item._id,
+      details:     { waybillNo: item.waybillNo },
       ip:          req.ip,
     });
 
-    return respond(res, 201, true, "Shipment created", {
-      id:             shipment._id,
-      trackingNumber: shipment.trackingNumber,
+    return respond(res, 201, true, "Shipment item created", {
+      id:       item._id,
+      waybillNo: item.waybillNo,
     });
   } catch (err) { next(err); }
 }
 
-// EMPLOYEE/ADMIN — update shipment details
-async function updateShipment(req, res, next) {
+// EMPLOYEE/ADMIN — update item details
+async function updateItem(req, res, next) {
   try {
-    const shipment = await trackingService.updateShipment(req.params.id, req.body);
-    if (!shipment) return respond(res, 404, false, "Shipment not found");
+    const item = await trackingService.updateShipmentItem(req.params.id, req.body);
+    if (!item) return respond(res, 404, false, "Shipment item not found");
 
     await audit.log({
       performedBy: req.user._id,
-      action:      "UPDATE_SHIPMENT",
-      targetModel: "Shipment",
+      action:      "UPDATE_SHIPMENT_ITEM",
+      targetModel: "ShipmentItem",
       targetId:    req.params.id,
       details:     req.body,
       ip:          req.ip,
     });
 
-    return respond(res, 200, true, "Shipment updated", shipment);
+    return respond(res, 200, true, "Shipment item updated", item);
   } catch (err) { next(err); }
 }
 
@@ -154,4 +159,15 @@ async function getStats(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { publicTrack, publicTrackByPhone, publicTrackByWaybill, internalTrack, logEvent, listShipments, myShipments, createShipment, updateShipment, getStats };
+module.exports = {
+  publicTrack,
+  publicTrackByPhone,
+  publicTrackByWaybill,
+  internalTrack,
+  updateItemStatus,
+  listItems,
+  myItems,
+  createItem,
+  updateItem,
+  getStats
+};

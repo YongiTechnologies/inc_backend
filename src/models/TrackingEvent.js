@@ -1,8 +1,15 @@
 const mongoose = require("mongoose");
 
+// ─── DEPRECATED ──────────────────────────────────────────────────────────────
+// This model is deprecated. All new development should use ShipmentItem.stageHistory.
+// Existing data should be migrated using: scripts/migrate-shipments-to-items.js
+// TODO: Remove this model after migration is complete and verified.
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * TrackingEvent — immutable append-only log of every checkpoint.
  * Never delete, only append. Source of truth for the shipment timeline.
+ * DEPRECATED: Use ShipmentItem.stageHistory instead.
  */
 const trackingEventSchema = new mongoose.Schema({
   shipmentId: {

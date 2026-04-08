@@ -69,7 +69,61 @@ enum: [
 
 ### Phase 2: Add Missing Fields to ShipmentItem
 
-**TODO**: Add fields that exist on `Shipment` but not on `ShipmentItem`:
+**Status**: COMPLETED
+
+- [x] ShipmentItem has all fields from Shipment model
+- [x] Origin/destination location schemas in place
+- [x] Delivery fields (photo, signature, deliveredAt) added
+- [x] Package details (weight, dimensions, declaredValue) added
+- [x] stageHistory extended with all TrackingEvent fields
+
+### Phase 3: Create Migration Script
+
+**Status**: COMPLETED
+
+- [x] Migration script created at `src/scripts/migrate-shipments-to-items.js`
+- [x] Script migrates Shipment + TrackingEvent → ShipmentItem.stageHistory
+- [x] Dry-run mode supported via DRY_RUN=true env var
+- [x] Safe migration (does not delete old records)
+
+### Phase 4: Update Services
+
+**Status**: COMPLETED
+
+- [x] tracking.service.js rewritten to use ShipmentItem
+- [x] tracking.service functions renamed (getTrackingByNumber, updateItemStatus, etc.)
+- [x] STATUS_TRANSITIONS extended for batch workflow
+- [x] gps.service.js updated to use ShipmentItem.stageHistory
+- [x] Dashboard controller updated to use unified ShipmentItem model
+
+### Phase 5: Update Controllers
+
+**Status**: COMPLETED
+
+- [x] tracking.controller.js updated with new method names
+- [x] updateItemStatus replaces addTrackingEvent
+- [x] createItem/createShipmentItem for manual entry
+- [x] gps.controller.js updated to use ShipmentItem
+- [x] dashboard.controller.js unified for ShipmentItem
+
+### Phase 6: Deprecate Old Models
+
+**Status**: IN PROGRESS
+
+- [x] Shipment.js marked as deprecated
+- [x] TrackingEvent.js marked as deprecated
+- [ ] Remove Shipment/TrackingEvent imports from remaining files
+- [ ] Update all tests to use ShipmentItem
+
+### Phase 7: Cleanup
+
+**TODO**:
+- [ ] Delete `Shipment.js` model (after verification period)
+- [ ] Delete `TrackingEvent.js` model
+- [ ] Merge `tracking.service.js` into `batch.service.js` (optional)
+- [ ] Merge `tracking.controller.js` into `batch.controller.js` (optional)
+- [ ] Update `app.js` route registration
+- [ ] Update documentation
 
 | Field | Current Location | Action |
 |-------|-----------------|--------|

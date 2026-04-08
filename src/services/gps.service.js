@@ -1,6 +1,5 @@
 const { GpsDevice, GpsPing } = require("../models/Gps");
-const Shipment      = require("../models/Shipment");
-const TrackingEvent = require("../models/TrackingEvent");
+const ShipmentItem  = require("../models/ShipmentItem");
 const User          = require("../models/User");
 
 /**
@@ -115,12 +114,12 @@ async function handleWebhook(providerName, rawPayload) {
       return null;
     }
 
-    const shipmentId = device.shipmentId;
+    const itemId = device.shipmentId;
 
     // Store the raw ping
     const savedPing = await GpsPing.create({
       ...ping,
-      shipmentId,
+      shipmentId: itemId,
       rawPayload,
       timestamp: new Date(),
     });
@@ -132,9 +131,9 @@ async function handleWebhook(providerName, rawPayload) {
       batteryPct: ping.batteryPct,
     });
 
-    // Auto-log a TrackingEvent if shipment has moved significantly
-    if (shipmentId) {
-      await maybeAutoLogEvent(shipmentId, ping, device);
+    // Auto-log a status update if shipment item has moved significantly
+    if (itemId) {
+      await maybeAutoLogEvent(itemId, ping, device);
     }
 
     return savedPing;
@@ -214,7 +213,7 @@ async function unassignDevice(deviceId) {
  */
 async function listDevices() {
   return GpsDevice.find()
-    .populate("shipmentId", "trackingNumber status destination")
+    .populate("shipmentId", "waybillNo status destination destinationCity")
     .sort({ updatedAt: -1 })
     .lean();
 }
@@ -269,23 +268,22 @@ async function reverseGeocode([lng, lat]) {
   }
 }
 
-async function maybeAutoLogEvent(shipmentId, ping, device) {
+async function maybeAutoLogEvent(itemId, ping, device) {
   try {
-    // Find the last TrackingEvent that had GPS coordinates
-    const lastEvent = await TrackingEvent.findOne({
-      shipmentId,
-      "location.coordinates": { $exists: true, $ne: [] },
-    }).sort({ timestamp: -1 });
+    // Find the last stageHistory entry that had GPS coordinates
+    const item = await ShipmentItem.findById(itemId);
+    if (!item) return;
 
-    const prevCoords = lastEvent?.location?.coordinates;
+    const historyWithLocation = item.stageHistory?.filter(h => h.location?.coordinates?.length) || [];
+    const lastEntry = historyWithLocation[historyWithLocation.length - 1];
+    const prevCoords = lastEntry?.location?.coordinates;
 
     // Skip if we haven't moved far enough yet
     if (prevCoords && haversineM(prevCoords, ping.coordinates) < AUTO_EVENT_DISTANCE_THRESHOLD_M) {
       return;
     }
 
-    const shipment = await Shipment.findById(shipmentId);
-    if (!shipment || ["delivered", "returned"].includes(shipment.status)) return;
+    if (["delivered", "returned"].includes(item.status)) return;
 
     // Get system user for automated events
     const systemUser = await User.findOne({ email: "system@ghanalogistics.com" });
@@ -296,19 +294,38 @@ async function maybeAutoLogEvent(shipmentId, ping, device) {
 
     const location = await reverseGeocode(ping.coordinates);
 
-    await TrackingEvent.create({
-      shipmentId,
-      updatedBy: systemUser._id,
-      status:    shipment.status, // keep current status, just update location
-      location:  { ...location, coordinates: ping.coordinates },
-      note:      `GPS update: ${location.city || "In transit"}`,
+    // Update the item's stageHistory with the new location
+    item.stageHistory.push({
+      stage: mapStatusToStage(item.status),
+      status: item.status,
+      updatedAt: new Date(),
+      location: { ...location, coordinates: ping.coordinates },
+      note: `GPS update: ${location.city || "In transit"}`,
       internalNote: `Auto-logged. Speed: ${ping.speed ?? "?"}km/h. Device: ${device.deviceId}`,
-      carrier:   "GPS Auto",
-      timestamp: new Date(),
+      carrier: "GPS Auto",
+      updatedBy: systemUser._id,
     });
+    await item.save();
   } catch (err) {
     console.error("Auto GPS event logging failed:", err.message);
   }
+}
+
+function mapStatusToStage(status) {
+  const stageMap = {
+    pending: 'pending',
+    picked_up: 'in_transit',
+    in_transit: 'in_transit',
+    customs: 'customs',
+    out_for_delivery: 'out_for_delivery',
+    delivered: 'delivered',
+    failed: 'failed',
+    returned: 'returned',
+    in_warehouse: 'in_warehouse',
+    shipped: 'shipped',
+    held: 'held',
+  };
+  return stageMap[status] || status;
 }
 
 module.exports = {

@@ -1,5 +1,11 @@
 const mongoose = require("mongoose");
 
+// ─── DEPRECATED ──────────────────────────────────────────────────────────────
+// This model is deprecated. All new development should use ShipmentItem.
+// Existing data should be migrated using: scripts/migrate-shipments-to-items.js
+// TODO: Remove this model after migration is complete and verified.
+// ─────────────────────────────────────────────────────────────────────────────
+
 const locationSchema = new mongoose.Schema(
   {
     address: { type: String, required: true },

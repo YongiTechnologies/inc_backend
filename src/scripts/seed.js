@@ -2,8 +2,7 @@ require("dotenv").config({ path: require("path").resolve(__dirname, "../../.env"
 const mongoose = require("mongoose");
 const { connectDB } = require("../config/db");
 const User = require("../models/User");
-const Shipment = require("../models/Shipment");
-const TrackingEvent = require("../models/TrackingEvent");
+const ShipmentItem = require("../models/ShipmentItem");
 const RefreshToken = require("../models/RefreshToken");
 
 async function seed() {
@@ -13,8 +12,7 @@ async function seed() {
   // Wipe existing data
   await Promise.all([
     User.deleteMany({}),
-    Shipment.deleteMany({}),
-    TrackingEvent.deleteMany({}),
+    ShipmentItem.deleteMany({}),
     RefreshToken.deleteMany({}),
   ]);
 
@@ -27,21 +25,11 @@ async function seed() {
   ]);
   console.log("✅ Users created");
 
-  // ─── Shipment 1: In Transit ───────────────────────────────────────────────
-  const s1 = await Shipment.create({
-    customerId:    customer._id,
-    assignedTo:    employee._id,
-    origin:        { address: "Unit 5, Yiwu International Trade Market", city: "Yiwu",   country: "China" },
-    destination:   { address: "Kantamanto Market, Ring Road Central",     city: "Accra",  country: "Ghana" },
-    status:        "customs",
-    description:   "Mixed Clothing & Accessories",
-    packageType:   "container",
-    weight:        420,
-    quantity:      8,
-    requiresCustoms: true,
-    estimatedDelivery: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
-  });
+  // ─── Item 1: In Transit (Customs) ─────────────────────────────────────────
+  const stageHistory1 = [];
+  const now = Date.now();
 
+  // Build stage history for item 1
   const events1 = [
     { status: "pending",    location: { address: "Unit 5, Yiwu Trade Market", city: "Yiwu",     country: "China" },   note: "Shipment registered. Awaiting pickup.",                         daysAgo: 12 },
     { status: "picked_up",  location: { address: "Unit 5, Yiwu Trade Market", city: "Yiwu",     country: "China" },   note: "Goods collected from supplier.",                                carrier: "China Post Logistics", daysAgo: 10 },
@@ -53,27 +41,41 @@ async function seed() {
 
   for (const e of events1) {
     const ts = e.hoursAgo
-      ? new Date(Date.now() - e.hoursAgo * 60 * 60 * 1000)
-      : new Date(Date.now() - e.daysAgo * 24 * 60 * 60 * 1000);
-    await TrackingEvent.create({ shipmentId: s1._id, updatedBy: employee._id, timestamp: ts, ...e });
+      ? new Date(now - e.hoursAgo * 60 * 60 * 1000)
+      : new Date(now - e.daysAgo * 24 * 60 * 60 * 1000);
+    stageHistory1.push({
+      stage: e.status,
+      status: e.status,
+      updatedAt: ts,
+      location: e.location,
+      note: e.note,
+      carrier: e.carrier,
+      carrierReference: e.carrierReference,
+      updatedBy: employee._id,
+    });
   }
 
-  // ─── Shipment 2: Delivered ────────────────────────────────────────────────
-  const s2 = await Shipment.create({
-    customerId:  customer._id,
-    assignedTo:  employee._id,
-    origin:      { address: "Guangzhou Wholesale Market", city: "Guangzhou", country: "China" },
-    destination: { address: "Kejetia Market",             city: "Kumasi",    country: "Ghana" },
-    status:      "delivered",
-    description: "Electronics & Phone Accessories",
-    packageType: "parcel",
-    weight:      85,
-    quantity:    3,
-    isFragile:   true,
-    deliveredAt: new Date(Date.now() - 5 * 60 * 60 * 1000),
-    estimatedDelivery: new Date(Date.now() - 6 * 60 * 60 * 1000),
+  const item1 = await ShipmentItem.create({
+    waybillNo:         "GLC-CUSTOMS-001",
+    customerId:        customer._id,
+    customerPhone:     "233244123456",
+    customerName:      "Ama Owusu",
+    origin:            { address: "Unit 5, Yiwu International Trade Market", city: "Yiwu",   country: "China" },
+    destination:       { address: "Kantamanto Market, Ring Road Central",     city: "Accra",  country: "Ghana" },
+    destinationCity:   "ACCRA",
+    status:            "customs",
+    productDescription:"Mixed Clothing & Accessories",
+    packageType:       "container",
+    weight:            420,
+    quantity:          8,
+    requiresCustoms:   true,
+    estimatedDelivery: new Date(now + 2 * 24 * 60 * 60 * 1000),
+    migratedFrom:      "manual",
+    stageHistory,
   });
 
+  // ─── Item 2: Delivered ────────────────────────────────────────────────────
+  const stageHistory2 = [];
   const events2 = [
     { status: "pending",          location: { address: "Guangzhou Wholesale Market", city: "Guangzhou", country: "China" }, note: "Shipment registered.",               daysAgo: 9 },
     { status: "picked_up",        location: { address: "Guangzhou Wholesale Market", city: "Guangzhou", country: "China" }, note: "Collected from supplier.",            carrier: "China Post", daysAgo: 8 },
@@ -86,19 +88,88 @@ async function seed() {
 
   for (const e of events2) {
     const ts = e.hoursAgo
-      ? new Date(Date.now() - e.hoursAgo * 60 * 60 * 1000)
-      : new Date(Date.now() - e.daysAgo * 24 * 60 * 60 * 1000);
-    await TrackingEvent.create({ shipmentId: s2._id, updatedBy: employee._id, timestamp: ts, ...e });
+      ? new Date(now - e.hoursAgo * 60 * 60 * 1000)
+      : new Date(now - e.daysAgo * 24 * 60 * 60 * 1000);
+    stageHistory2.push({
+      stage: e.status,
+      status: e.status,
+      updatedAt: ts,
+      location: e.location,
+      note: e.note,
+      carrier: e.carrier,
+      updatedBy: employee._id,
+    });
   }
 
-  console.log("✅ Shipments + tracking events created");
+  const item2 = await ShipmentItem.create({
+    waybillNo:         "GLC-DELIVERED-001",
+    customerId:        customer._id,
+    customerPhone:     "233244123456",
+    customerName:      "Ama Owusu",
+    origin:            { address: "Guangzhou Wholesale Market", city: "Guangzhou", country: "China" },
+    destination:       { address: "Kejetia Market",             city: "Kumasi",    country: "Ghana" },
+    destinationCity:   "KUMASI",
+    status:            "delivered",
+    productDescription:"Electronics & Phone Accessories",
+    packageType:       "parcel",
+    weight:            85,
+    quantity:          3,
+    isFragile:         true,
+    deliveredAt:       new Date(now - 5 * 60 * 60 * 1000),
+    estimatedDelivery: new Date(now - 6 * 60 * 60 * 1000),
+    migratedFrom:      "manual",
+    stageHistory:      stageHistory2,
+  });
+
+  // ─── Item 3: In Warehouse (batch workflow) ─────────────────────────────────
+  await ShipmentItem.create({
+    waybillNo:         "INTAKE-001",
+    invoiceNo:         "INV-001",
+    customerPhone:     "233244123456",
+    customerName:      "Ama Owusu",
+    destinationCity:   "ACCRA",
+    status:            "in_warehouse",
+    productDescription:"Cartons of goods",
+    quantity:          5,
+    intakeDate:        new Date(now - 1 * 24 * 60 * 60 * 1000),
+    migratedFrom:      "excel",
+    stageHistory: [{
+      stage:     "intake",
+      status:    "in_warehouse",
+      updatedAt: new Date(now - 1 * 24 * 60 * 60 * 1000),
+      note:      "Created via intake upload",
+    }],
+  });
+
+  // ─── Item 4: Shipped (batch workflow) ─────────────────────────────────────
+  await ShipmentItem.create({
+    waybillNo:         "SHIPPED-001",
+    customerPhone:     "233244123456",
+    customerName:      "Ama Owusu",
+    destinationCity:   "KUMASI",
+    status:            "shipped",
+    productDescription:"Electronics",
+    quantity:          10,
+    receivingDate:     new Date(now - 3 * 24 * 60 * 60 * 1000),
+    migratedFrom:      "excel",
+    stageHistory: [{
+      stage:     "shipped",
+      status:    "shipped",
+      updatedAt: new Date(now - 2 * 24 * 60 * 60 * 1000),
+      note:      "Loaded on container",
+    }],
+  });
+
+  console.log("✅ ShipmentItems created");
   console.log("\n🔑 Login credentials:");
   console.log("   Admin:    admin@ghanalogistics.com   / Admin1234!");
   console.log("   Employee: kofi@ghanalogistics.com    / Employee1!");
   console.log("   Customer: ama@example.com            / Customer1!");
   console.log(`\n📦 Tracking numbers:`);
-  console.log(`   ${s1.trackingNumber} (Customs)`);
-  console.log(`   ${s2.trackingNumber} (Delivered)`);
+  console.log(`   ${item1.waybillNo} (Customs)`);
+  console.log(`   ${item2.waybillNo} (Delivered)`);
+  console.log(`   INTAKE-001 (In Warehouse)`);
+  console.log(`   SHIPPED-001 (Shipped)`);
 
   await mongoose.disconnect();
   process.exit(0);
