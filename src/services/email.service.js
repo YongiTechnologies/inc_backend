@@ -44,7 +44,7 @@ async function sendTrackingUpdate({ to, name, trackingNumber, statusLabel, locat
   `;
 
   await getTransporter().sendMail({
-    from:    process.env.EMAIL_FROM || "Ghana Logistics Co. <no-reply@ghanalogistics.com>",
+    from:    process.env.EMAIL_FROM || "I&C Logistics Co. <no-reply@inclogistics.com>",
     to,
     subject: `Shipment Update: ${trackingNumber} — ${statusLabel}`,
     html,
@@ -67,7 +67,7 @@ async function sendPasswordReset({ to, name, resetUrl }) {
   `;
 
   await getTransporter().sendMail({
-    from:    process.env.EMAIL_FROM || "Ghana Logistics Co. <no-reply@ghanalogistics.com>",
+    from:    process.env.EMAIL_FROM || "I&C Logistics Co. <no-reply@inclogistics.com>",
     to,
     subject: "Password Reset Instructions",
     html,
@@ -87,7 +87,7 @@ async function sendPasswordChanged({ to, name }) {
   `;
 
   await getTransporter().sendMail({
-    from:    process.env.EMAIL_FROM || "Ghana Logistics Co. <no-reply@ghanalogistics.com>",
+    from:    process.env.EMAIL_FROM || "I&C Logistics Co. <no-reply@inclogistics.com>",
     to,
     subject: "Your password has been changed",
     html,

@@ -32,7 +32,7 @@ const { validate, validators } = require("../utils/validators");
  *               email:
  *                 type: string
  *                 format: email
- *                 example: kofi@ghanalogistics.com
+ *                 example: kofi@inclogistics.com
  *               phone:
  *                 type: string
  *                 example: "+233 26 123 4567"

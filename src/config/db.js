@@ -5,7 +5,7 @@ async function connectDB() {
   if (!uri) throw new Error("MONGODB_URI is not set in environment variables");
 
   await mongoose.connect(uri, {
-    dbName: process.env.DB_NAME || "ghana_logistics",
+    dbName: process.env.DB_NAME || "inc_logistics",
   });
   console.log(`✅ MongoDB connected: ${mongoose.connection.host}`);
 }

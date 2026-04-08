@@ -1,36 +1,17 @@
 const User         = require("../models/User");
-const Shipment     = require("../models/Shipment");
 const ShipmentItem = require("../models/ShipmentItem");
 const { respond }  = require("../utils/response");
 const { normalisePhone } = require("../services/batch.service");
 
 /**
- * Customer dashboard stats — combines both tracking domains:
- *  1. Individual shipments (Shipment model — staff-created, full lifecycle)
- *  2. Batch shipment items (ShipmentItem model — Excel-uploaded)
+ * Customer dashboard stats — unified ShipmentItem model.
  */
 async function getCustomerStats(req, res, next) {
   try {
     const user       = req.user;
     const customerId = user._id;
 
-    // ── Individual shipments ──────────────────────────────────────────────────
-    const shipments = await Shipment.find({ customerId })
-      .select("status estimatedDelivery")
-      .lean();
-
-    const individualTotal    = shipments.length;
-    const individualInTransit = shipments.filter((s) =>
-      ["pending", "picked_up", "in_transit", "customs", "out_for_delivery"].includes(s.status)
-    ).length;
-    const individualDelivered = shipments.filter((s) => s.status === "delivered").length;
-
-    const nextIndividualDelivery = shipments
-      .filter((s) => !["delivered", "returned", "failed"].includes(s.status) && s.estimatedDelivery)
-      .map((s) => s.estimatedDelivery)
-      .sort((a, b) => new Date(a) - new Date(b))[0] || null;
-
-    // ── Batch shipment items ──────────────────────────────────────────────────
+    // ── All shipment items (unified model) ────────────────────────────────────
     // Match by customerId OR by phone (catches items uploaded before they registered)
     const orConditions = [{ customerId }];
     if (user.phone) {
@@ -38,76 +19,67 @@ async function getCustomerStats(req, res, next) {
       if (norm) orConditions.push({ customerPhone: norm });
     }
 
-    const [batchTotal, batchInWarehouse, batchShipped, batchArrived, batchHeld] =
-      await Promise.all([
-        ShipmentItem.countDocuments({ $or: orConditions }),
-        ShipmentItem.countDocuments({ $or: orConditions, status: "in_warehouse" }),
-        ShipmentItem.countDocuments({ $or: orConditions, status: "shipped" }),
-        ShipmentItem.countDocuments({ $or: orConditions, status: "arrived" }),
-        ShipmentItem.countDocuments({ $or: orConditions, status: "held" }),
-      ]);
+    const items = await ShipmentItem.find({ $or: orConditions })
+      .select("status estimatedDelivery deliveredAt")
+      .lean();
+
+    const totalItems    = items.length;
+    const inTransit     = items.filter((item) =>
+      ["pending", "picked_up", "in_transit", "customs", "out_for_delivery", "shipped"].includes(item.status)
+    ).length;
+    const delivered     = items.filter((item) => item.status === "delivered").length;
+    const inWarehouse   = items.filter((item) => item.status === "in_warehouse").length;
+    const held          = items.filter((item) => item.status === "held").length;
+
+    const nextDelivery = items
+      .filter((item) => !["delivered", "returned", "failed"].includes(item.status) && item.estimatedDelivery)
+      .map((item) => item.estimatedDelivery)
+      .sort((a, b) => new Date(a) - new Date(b))[0] || null;
 
     return respond(res, 200, true, "Customer stats retrieved", {
-      // Individual tracked shipments
-      individual: {
-        total:       individualTotal,
-        inTransit:   individualInTransit,
-        delivered:   individualDelivered,
-        nextDelivery: nextIndividualDelivery,
-      },
-      // Batch / Excel-uploaded shipment items
-      batch: {
-        total:       batchTotal,
-        inWarehouse: batchInWarehouse,
-        shipped:     batchShipped,
-        arrived:     batchArrived,
-        held:        batchHeld,
-      },
-      // Combined quick summary for a simple dashboard counter
-      summary: {
-        totalItems:  individualTotal + batchTotal,
-        inTransit:   individualInTransit + batchShipped,
-        delivered:   individualDelivered + batchArrived,
-      },
+      totalItems,
+      inTransit,
+      delivered,
+      inWarehouse,
+      held,
+      nextDelivery,
     });
   } catch (err) { next(err); }
 }
 
 /**
- * Employee dashboard stats — unchanged
+ * Employee dashboard stats — unified ShipmentItem model
  */
 async function getEmployeeStats(req, res, next) {
   try {
     const now          = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const [activeShipments, pendingUpdates, completedToday,
-           batchInWarehouse, batchShipped, batchHeld] = await Promise.all([
-      Shipment.countDocuments({ status: { $nin: ["delivered", "returned", "failed"] } }),
-      Shipment.countDocuments({ status: "pending" }),
-      Shipment.countDocuments({ status: "delivered", deliveredAt: { $gte: startOfToday } }),
+    const [activeItems, pendingUpdates, completedToday,
+           inWarehouse, shipped, held] = await Promise.all([
+      ShipmentItem.countDocuments({ status: { $nin: ["delivered", "returned", "failed"] } }),
+      ShipmentItem.countDocuments({ status: "pending" }),
+      ShipmentItem.countDocuments({ status: "delivered", deliveredAt: { $gte: startOfToday } }),
       ShipmentItem.countDocuments({ status: "in_warehouse" }),
       ShipmentItem.countDocuments({ status: "shipped" }),
       ShipmentItem.countDocuments({ status: "held" }),
     ]);
 
     return respond(res, 200, true, "Employee stats retrieved", {
-      // Individual shipments
-      activeShipments,
+      activeItems,
       pendingUpdates,
       completedToday,
-      // Batch items
       batchItems: {
-        inWarehouse: batchInWarehouse,
-        shipped:     batchShipped,
-        held:        batchHeld,
+        inWarehouse,
+        shipped,
+        held,
       },
     });
   } catch (err) { next(err); }
 }
 
 /**
- * Admin dashboard stats — unchanged, adds batch totals
+ * Admin dashboard stats — unified ShipmentItem model
  */
 async function getAdminStats(req, res, next) {
   try {
@@ -116,9 +88,8 @@ async function getAdminStats(req, res, next) {
 
     const [
       userStats,
-      shipmentStats,
+      itemStats,
       completedThisMonth,
-      batchStatusCounts,
     ] = await Promise.all([
       Promise.all([
         User.countDocuments(),
@@ -126,27 +97,25 @@ async function getAdminStats(req, res, next) {
         User.countDocuments({ createdAt: { $gte: startOfMonth } }),
       ]),
       Promise.all([
-        Shipment.countDocuments(),
-        Shipment.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
-        Shipment.countDocuments({
-          status: { $in: ["picked_up", "in_transit", "customs", "out_for_delivery"] },
-        }),
+        ShipmentItem.countDocuments(),
+        ShipmentItem.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
       ]),
-      Shipment.countDocuments({ status: "delivered", deliveredAt: { $gte: startOfMonth } }),
-      ShipmentItem.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+      ShipmentItem.countDocuments({ status: "delivered", deliveredAt: { $gte: startOfMonth } }),
     ]);
 
-    const [totalUsers, usersByRole, newUsersThisMonth]       = userStats;
-    const [totalShipments, shipmentsByStatus, activeLogistics] = shipmentStats;
+    const [totalUsers, usersByRole, newUsersThisMonth] = userStats;
+    const [totalItems, itemsByStatus] = itemStats;
 
     const roleMap = {};
     usersByRole.forEach(({ _id, count }) => { roleMap[_id] = count; });
 
     const statusMap = {};
-    shipmentsByStatus.forEach(({ _id, count }) => { statusMap[_id] = count; });
+    itemsByStatus.forEach(({ _id, count }) => { statusMap[_id] = count; });
 
-    const batchStatusMap = {};
-    batchStatusCounts.forEach(({ _id, count }) => { batchStatusMap[_id] = count; });
+    // Count active logistics items (in transit statuses)
+    const activeLogistics = statusMap["pending"] + statusMap["picked_up"] +
+                           statusMap["in_transit"] + statusMap["customs"] +
+                           statusMap["out_for_delivery"] + statusMap["shipped"] || 0;
 
     return respond(res, 200, true, "Admin stats retrieved", {
       users: {
@@ -154,15 +123,11 @@ async function getAdminStats(req, res, next) {
         byRole:       roleMap,
         newThisMonth: newUsersThisMonth,
       },
-      shipments: {
-        total:              totalShipments,
+      items: {
+        total:              totalItems,
         byStatus:           statusMap,
         activeLogistics,
         completedThisMonth,
-      },
-      batchItems: {
-        total:       Object.values(batchStatusMap).reduce((a, b) => a + b, 0),
-        byStatus:    batchStatusMap,
       },
     });
   } catch (err) { next(err); }

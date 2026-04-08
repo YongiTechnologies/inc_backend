@@ -36,24 +36,24 @@ async function webhook(req, res, next) {
  */
 async function liveTrail(req, res, next) {
   try {
-    const Shipment = require("../models/Shipment");
-    const shipment = await Shipment.findOne({
-      trackingNumber: req.params.trackingNumber.toUpperCase(),
+    const ShipmentItem = require("../models/ShipmentItem");
+    const item = await ShipmentItem.findOne({
+      waybillNo: req.params.trackingNumber.toUpperCase(),
     }).select("_id status");
 
-    if (!shipment) return respond(res, 404, false, "Tracking number not found");
+    if (!item) return respond(res, 404, false, "Tracking number not found");
 
     const [trail, current] = await Promise.all([
-      gpsService.getLiveTrail(shipment._id, { limit: 300 }),
-      gpsService.getCurrentPosition(shipment._id),
+      gpsService.getLiveTrail(item._id, { limit: 300 }),
+      gpsService.getCurrentPosition(item._id),
     ]);
 
     return respond(res, 200, true, "Live trail retrieved", {
-      shipmentId: shipment._id,
-      status:     shipment.status,
-      hasGps:     !!current,
-      current,         // { coordinates, speed, bearing, batteryPct, timestamp }
-      trail,           // array of pings, oldest-first — draw as polyline
+      itemId:   item._id,
+      status:   item.status,
+      hasGps:   !!current,
+      current,  // { coordinates, speed, bearing, batteryPct, timestamp }
+      trail,    // array of pings, oldest-first — draw as polyline
     });
   } catch (err) { next(err); }
 }

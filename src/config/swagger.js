@@ -4,12 +4,12 @@ const options = {
   definition: {
     openapi: "3.0.0",
     info: {
-      title: "Ghana Logistics Co. API",
+      title: "I&C Logistics API",
       version: "1.0.0",
       description: "API for managing logistics tracking, GPS devices, and shipments across Ghana and international routes",
       contact: {
         name: "API Support",
-        email: "support@ghanalogistics.com",
+        email: "support@inclogistics.com",
       },
     },
     servers: [
@@ -74,7 +74,7 @@ const options = {
             },
             email: {
               type: "string",
-              example: "kofi@ghanalogistics.com",
+              example: "kofi@inclogistics.com",
             },
             phone: {
               type: "string",
@@ -392,7 +392,7 @@ const options = {
               },
               example: {
                 name: "Kofi Mensah",
-                email: "kofi@ghanalogistics.com",
+                email: "kofi@inclogistics.com",
                 role: "employee",
               },
             },

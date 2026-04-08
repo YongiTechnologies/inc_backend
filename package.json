@@ -1,12 +1,13 @@
 {
-  "name": "ghana-logistics-backend",
+  "name": "inc-logistics-backend",
   "version": "1.0.0",
-  "description": "Ghana Logistics Co. - Backend API",
+  "description": "I&C Logistics - Backend API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node src/scripts/seed.js"
+    "seed": "node src/scripts/seed.js",
+    "migrate-shipments": "node src/scripts/migrate-shipments-to-items.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

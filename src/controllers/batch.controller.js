@@ -398,45 +398,6 @@ async function updateItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// ─── Public tracking (NO auth required) ──────────────────────────────────────
-
-async function lookupByPhone(req, res, next) {
-  try {
-    const normalised = normalisePhone(req.params.phone);
-    if (!normalised) return respond(res, 400, false, "Invalid phone number");
-
-    const items = await ShipmentItem.find({ customerPhone: normalised })
-      .sort({ updatedAt: -1 })
-      .select(PUBLIC_ITEM_SELECT)
-      .populate("intakeBatch",  "batchCode stage createdAt")
-      .populate("shippedBatch", "batchCode stage createdAt");
-
-    if (!items.length) {
-      return respond(res, 404, false, "No shipments found for this phone number");
-    }
-
-    const grouped = { in_warehouse: [], shipped: [], held: [] };
-    items.forEach((item) => {
-      if (grouped[item.status]) grouped[item.status].push(item);
-    });
-
-    return respond(res, 200, true, "Shipments retrieved", { total: items.length, grouped });
-  } catch (err) { next(err); }
-}
-
-async function lookupByWaybill(req, res, next) {
-  try {
-    const waybill = req.params.waybill.trim().toUpperCase();
-    const item    = await ShipmentItem.findOne({ waybillNo: waybill })
-      .select(PUBLIC_ITEM_SELECT)
-      .populate("intakeBatch",  "batchCode stage createdAt")
-      .populate("shippedBatch", "batchCode stage createdAt");
-
-    if (!item) return respond(res, 404, false, "Waybill not found");
-    return respond(res, 200, true, "Item retrieved", item);
-  } catch (err) { next(err); }
-}
-
 module.exports = {
   uploadIntake,
   uploadShipped,
@@ -448,6 +409,4 @@ module.exports = {
   getHeldItems,
   reassignHeldItem,
   updateItem,
-  lookupByPhone,
-  lookupByWaybill,
 };

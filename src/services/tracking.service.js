@@ -1,5 +1,4 @@
-const Shipment = require("../models/Shipment");
-const TrackingEvent = require("../models/TrackingEvent");
+const ShipmentItem = require("../models/ShipmentItem");
 const User = require("../models/User");
 const emailService = require("./email.service");
 const { escapeRegex } = require("../utils/validators");
@@ -7,6 +6,7 @@ const { escapeRegex } = require("../utils/validators");
 /**
  * Valid status transitions. Prevents nonsensical moves
  * e.g. delivered → pending is not allowed.
+ * Supports both traditional workflow and batch workflow statuses.
  */
 const STATUS_TRANSITIONS = {
   pending:          ["picked_up", "failed"],
@@ -17,6 +17,10 @@ const STATUS_TRANSITIONS = {
   delivered:        [],           // terminal
   failed:           ["in_transit", "returned"],
   returned:         [],           // terminal
+  // Batch workflow statuses
+  in_warehouse:     ["shipped", "held", "pending"],
+  shipped:          ["pending", "in_transit", "held"],
+  held:             ["in_warehouse", "shipped", "pending"],
 };
 
 const STATUS_LABELS = {
@@ -28,120 +32,124 @@ const STATUS_LABELS = {
   delivered:        "Delivered",
   failed:           "Delivery Attempted",
   returned:         "Returned to Sender",
+  in_warehouse:     "In Warehouse",
+  shipped:          "Shipped",
+  held:             "On Hold",
 };
 
 /**
  * Public tracker — no auth required.
+ * Returns ShipmentItem by waybill number.
  * Strips internal notes before returning.
  */
-async function getTrackingByNumber(trackingNumber) {
-  const shipment = await Shipment.findOne({ trackingNumber })
+async function getTrackingByNumber(waybillNo) {
+  const item = await ShipmentItem.findOne({ waybillNo: waybillNo.toUpperCase() })
     .populate("customerId", "name")
     .lean();
 
-  if (!shipment) return null;
+  if (!item) return null;
 
-  const events = await TrackingEvent.find({ shipmentId: shipment._id })
-    .sort({ timestamp: -1 })
-    .populate("updatedBy", "name")
-    .select("-internalNote")
-    .lean();
-
-  return buildResponse(shipment, events);
+  return buildItemResponse(item, { includeInternal: false });
 }
 
 /**
  * Internal tracker — full detail including internal notes.
  */
-async function getTrackingInternal(shipmentId) {
-  const shipment = await Shipment.findById(shipmentId)
+async function getTrackingInternal(itemId) {
+  const item = await ShipmentItem.findById(itemId)
     .populate("customerId", "name email phone")
     .populate("assignedTo", "name email")
     .lean();
 
-  if (!shipment) return null;
+  if (!item) return null;
 
-  const events = await TrackingEvent.find({ shipmentId: shipment._id })
-    .sort({ timestamp: -1 })
-    .populate("updatedBy", "name role")
-    .lean();
-
-  return buildResponse(shipment, events, { includeInternal: true });
+  return buildItemResponse(item, { includeInternal: true });
 }
 
 /**
- * Log a new tracking checkpoint.
- * Validates the transition, updates the parent shipment, and fires email.
+ * Update status on a ShipmentItem (replaces addTrackingEvent).
+ * Appends to stageHistory and updates the item status.
  */
-async function addTrackingEvent({ shipmentId, updatedBy, status, location, note, internalNote, carrier, carrierReference }) {
-  const shipment = await Shipment.findById(shipmentId).populate("customerId", "name email");
-  if (!shipment) throw new Error("Shipment not found");
+async function updateItemStatus({ itemId, updatedBy, status, location, note, internalNote, carrier, carrierReference }) {
+  const item = await ShipmentItem.findById(itemId).populate("customerId", "name email");
+  if (!item) throw new Error("ShipmentItem not found");
 
-  const allowed = STATUS_TRANSITIONS[shipment.status] || [];
+  const allowed = STATUS_TRANSITIONS[item.status] || [];
   if (!allowed.includes(status)) {
     throw new Error(
-      `Invalid transition: "${shipment.status}" → "${status}". Allowed: [${allowed.join(", ") || "none — terminal status"}]`
+      `Invalid transition: "${item.status}" → "${status}". Allowed: [${allowed.join(", ") || "none — terminal status"}]`
     );
   }
 
-  const event = await TrackingEvent.create({
-    shipmentId,
-    updatedBy,
+  // Build stage history entry
+  const stageEntry = {
+    stage: mapStatusToStage(status),
     status,
-    location,
-    note,
-    internalNote,
-    carrier,
-    carrierReference,
-    timestamp: new Date(),
-  });
+    updatedAt: new Date(),
+    note: note || null,
+    location: location || null,
+    internalNote: internalNote || null,
+    carrier: carrier || null,
+    carrierReference: carrierReference || null,
+    updatedBy,
+  };
 
-  // Update parent
-  const update = { status };
-  if (status === "delivered") update.deliveredAt = new Date();
-  await Shipment.findByIdAndUpdate(shipmentId, update);
+  // Update item
+  const updateData = {
+    status,
+    $push: { stageHistory: stageEntry },
+  };
+
+  if (status === "delivered") {
+    updateData.deliveredAt = new Date();
+  }
+
+  const updatedItem = await ShipmentItem.findByIdAndUpdate(itemId, updateData, { new: true });
 
   // Fire email notification (non-blocking)
-  if (shipment.customerId?.email) {
+  if (item.customerId?.email) {
     emailService
       .sendTrackingUpdate({
-        to:             shipment.customerId.email,
-        name:           shipment.customerId.name,
-        trackingNumber: shipment.trackingNumber,
+        to:             item.customerId.email,
+        name:           item.customerId.name,
+        trackingNumber: item.waybillNo,
         statusLabel:    STATUS_LABELS[status],
-        location,
+        location:      location,
         note,
       })
       .catch((err) => console.error("Email notification failed:", err.message));
   }
 
-  return event;
+  return updatedItem;
 }
 
 /**
- * Create a new shipment and auto-log the first "pending" event.
+ * Create a new shipment item manually (staff entry).
  */
-async function createShipment(data, createdBy) {
-  const shipment = await Shipment.create(data);
-
-  await TrackingEvent.create({
-    shipmentId: shipment._id,
-    updatedBy:  createdBy,
-    status:     "pending",
-    location:   data.origin,
-    note:       "Shipment registered. Awaiting pickup.",
-    timestamp:  new Date(),
+async function createShipmentItem(data, createdBy) {
+  const item = await ShipmentItem.create({
+    ...data,
+    migratedFrom: "manual",
+    stageHistory: [{
+      stage:     mapStatusToStage(data.status || "pending"),
+      status:    data.status || "pending",
+      updatedAt: new Date(),
+      note:      "Shipment item registered manually by staff",
+      updatedBy: createdBy,
+    }],
   });
 
-  return shipment;
+  return item;
 }
 
-async function updateShipment(id, data) {
+async function updateShipmentItem(id, data) {
   const allowedFields = [
     "assignedTo",
     "origin",
     "destination",
+    "destinationCity",
     "description",
+    "productDescription",
     "packageType",
     "weight",
     "dimensions",
@@ -151,6 +159,8 @@ async function updateShipment(id, data) {
     "requiresCustoms",
     "isFragile",
     "specialInstructions",
+    "deliveryPhoto",
+    "deliverySignature",
   ];
 
   const updateData = {};
@@ -162,7 +172,7 @@ async function updateShipment(id, data) {
 
   if (Object.keys(updateData).length === 0) return null;
 
-  return Shipment.findByIdAndUpdate(id, updateData, {
+  return ShipmentItem.findByIdAndUpdate(id, updateData, {
     new: true,
     runValidators: true,
   }).populate("customerId", "name email phone").populate("assignedTo", "name email").lean();
@@ -171,31 +181,33 @@ async function updateShipment(id, data) {
 /**
  * Paginated list with optional filters.
  */
-async function listShipments({ page = 1, limit = 20, status, search, customerId } = {}) {
+async function listShipmentItems({ page = 1, limit = 20, status, search, customerId } = {}) {
   const filter = {};
   if (status)     filter.status = status;
   if (customerId) filter.customerId = customerId;
   if (search) {
     const escaped = escapeRegex(search);
     filter.$or = [
-      { trackingNumber: new RegExp(escaped, "i") },
-      { description:    new RegExp(escaped, "i") },
-      { "destination.city": new RegExp(escaped, "i") },
+      { waybillNo:           new RegExp(escaped, "i") },
+      { invoiceNo:           new RegExp(escaped, "i") },
+      { productDescription:  new RegExp(escaped, "i") },
+      { destinationCity:     new RegExp(escaped, "i") },
+      { customerName:        new RegExp(escaped, "i") },
     ];
   }
 
-  const [shipments, total] = await Promise.all([
-    Shipment.find(filter)
-      .sort({ createdAt: -1 })
+  const [items, total] = await Promise.all([
+    ShipmentItem.find(filter)
+      .sort({ updatedAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .populate("customerId", "name email phone")
       .populate("assignedTo", "name")
       .lean(),
-    Shipment.countDocuments(filter),
+    ShipmentItem.countDocuments(filter),
   ]);
 
-  return { shipments, pagination: { total, page, limit, pages: Math.ceil(total / limit) } };
+  return { items, pagination: { total, page, limit, pages: Math.ceil(total / limit) } };
 }
 
 /**
@@ -210,12 +222,12 @@ async function getStats({ from, to } = {}) {
   }
 
   const [total, byStatus, recentDeliveries] = await Promise.all([
-    Shipment.countDocuments(matchFilter),
-    Shipment.aggregate([
+    ShipmentItem.countDocuments(matchFilter),
+    ShipmentItem.aggregate([
       { $match: matchFilter },
       { $group: { _id: "$status", count: { $sum: 1 } } }
     ]),
-    Shipment.countDocuments({
+    ShipmentItem.countDocuments({
       status: "delivered",
       deliveredAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
       ...matchFilter,
@@ -230,8 +242,25 @@ async function getStats({ from, to } = {}) {
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
-function buildResponse(shipment, events, options = {}) {
-  const latest = events[0] || null;
+function mapStatusToStage(status) {
+  const stageMap = {
+    pending: 'pending',
+    picked_up: 'in_transit',
+    in_transit: 'in_transit',
+    customs: 'customs',
+    out_for_delivery: 'out_for_delivery',
+    delivered: 'delivered',
+    failed: 'failed',
+    returned: 'returned',
+    in_warehouse: 'in_warehouse',
+    shipped: 'shipped',
+    held: 'held',
+  };
+  return stageMap[status] || status;
+}
+
+function buildItemResponse(item, options = {}) {
+  const latestStage = item.stageHistory?.[item.stageHistory.length - 1] || null;
 
   // Calculate progress percentage based on status
   const progressMap = {
@@ -243,61 +272,82 @@ function buildResponse(shipment, events, options = {}) {
     delivered: 100,
     failed: 40,
     returned: 0,
+    in_warehouse: 10,
+    shipped: 30,
+    held: 20,
   };
 
-  return {
-    trackingNumber: shipment.trackingNumber,
+  // Build timeline from stageHistory
+  const timeline = (item.stageHistory || []).map((stage, idx) => ({
+    id:       `${item._id}-stage-${idx}`,
+    status:   stage.status,
+    label:    STATUS_LABELS[stage.status] || stage.status,
+    location: stage.location,
+    note:     stage.note,
+    ...(options.includeInternal && { internalNote: stage.internalNote }),
+    carrier:          stage.carrier,
+    carrierReference: stage.carrierReference,
+    updatedBy:        stage.updatedBy ? { name: stage.updatedBy.name || "Unknown" } : null,
+    timestamp:        stage.updatedAt,
+  }));
+
+  const response = {
+    waybillNo:        item.waybillNo,
+    invoiceNo:        item.invoiceNo,
     status: {
-      code:      shipment.status,
-      label:     STATUS_LABELS[shipment.status],
-      updatedAt: latest?.timestamp || shipment.updatedAt,
+      code:      item.status,
+      label:     STATUS_LABELS[item.status],
+      updatedAt: latestStage?.updatedAt || item.updatedAt,
     },
     route: {
-      origin:          shipment.origin,
-      destination:     shipment.destination,
-      currentLocation: latest?.location || shipment.origin,
+      origin:          item.origin,
+      destination:     item.destination,
+      destinationCity: item.destinationCity,
+      currentLocation: latestStage?.location || item.origin,
     },
     cargo: {
-      description:     shipment.description,
-      packageType:     shipment.packageType,
-      weight:          shipment.weight,
-      quantity:        shipment.quantity,
-      isFragile:       shipment.isFragile,
-      requiresCustoms: shipment.requiresCustoms,
+      description:       item.description || item.productDescription,
+      productDescription: item.productDescription,
+      packageType:       item.packageType,
+      weight:            item.weight,
+      quantity:          item.quantity,
+      isFragile:         item.isFragile,
+      requiresCustoms:   item.requiresCustoms,
     },
     dates: {
-      created:           shipment.createdAt,
-      estimatedDelivery: shipment.estimatedDelivery,
-      delivered:         shipment.deliveredAt || null,
+      created:           item.createdAt,
+      intakeDate:        item.intakeDate,
+      receivingDate:     item.receivingDate,
+      estimatedDelivery: item.estimatedDelivery,
+      delivered:         item.deliveredAt || null,
     },
-    progressPercent: progressMap[shipment.status] || 0,
-    timeline: events.map((e) => ({
-      id:       e._id,
-      status:   e.status,
-      label:    STATUS_LABELS[e.status],
-      location: e.location,
-      note:     e.note,
-      ...(options.includeInternal && { internalNote: e.internalNote }),
-      carrier:          e.carrier,
-      carrierReference: e.carrierReference,
-      updatedBy:        e.updatedBy ? { name: e.updatedBy.name } : null,
-      timestamp:        e.timestamp,
-    })),
-    ...(options.includeInternal && {
-      customer:            shipment.customerId,
-      assignedTo:          shipment.assignedTo,
-      specialInstructions: shipment.specialInstructions,
-    }),
+    progressPercent: progressMap[item.status] || 0,
+    timeline,
+    batch: {
+      intakeBatch:  item.intakeBatch,
+      shippedBatch: item.shippedBatch,
+    },
   };
+
+  if (options.includeInternal) {
+    response.customer = item.customerId;
+    response.assignedTo = item.assignedTo;
+    response.specialInstructions = item.specialInstructions;
+    response.staffNotes = item.staffNotes;
+    response.heldReason = item.heldReason;
+    response.reassignedTo = item.reassignedTo;
+  }
+
+  return response;
 }
 
 module.exports = {
   getTrackingByNumber,
   getTrackingInternal,
-  addTrackingEvent,
-  createShipment,
-  updateShipment,
-  listShipments,
+  updateItemStatus,
+  createShipmentItem,
+  updateShipmentItem,
+  listShipmentItems,
   getStats,
   STATUS_TRANSITIONS,
   STATUS_LABELS,
