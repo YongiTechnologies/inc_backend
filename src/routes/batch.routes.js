@@ -411,4 +411,10 @@ router.patch("/batches/items/:itemId/reassign", ...staffOnly, ctrl.reassignHeldI
  */
 router.patch("/batches/items/:itemId", ...staffOnly, ctrl.updateItem);
 
+// ─── Public tracking endpoints removed ───────────────────────────────────────
+// These have been consolidated into tracking.routes.js:
+// - GET /api/tracking/phone/:phone
+// - GET /api/tracking/waybill/:waybill
+// Use those endpoints instead for public tracking lookups.
+
 module.exports = router;

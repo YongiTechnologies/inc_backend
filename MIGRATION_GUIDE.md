@@ -117,13 +117,31 @@ enum: [
 
 ### Phase 7: Cleanup
 
-**TODO**:
-- [ ] Delete `Shipment.js` model (after verification period)
-- [ ] Delete `TrackingEvent.js` model
-- [ ] Merge `tracking.service.js` into `batch.service.js` (optional)
-- [ ] Merge `tracking.controller.js` into `batch.controller.js` (optional)
-- [ ] Update `app.js` route registration
-- [ ] Update documentation
+**Status**: COMPLETED
+
+- [x] Deleted `src/models/Shipment.js`
+- [x] Deleted `src/models/TrackingEvent.js`
+- [x] Migration script updated to handle missing models gracefully
+- [x] All imports updated to use `ShipmentItem`
+- [x] Verified migration successful (4 shipments migrated)
+
+## Post-Migration Notes
+
+The migration is now complete. The system uses a unified `ShipmentItem` model for all shipment tracking.
+
+**Kept separate (by design):**
+- `tracking.service.js` - Handles status transitions, tracking lookups, timeline building
+- `batch.service.js` - Handles Excel parsing, batch workflows, phone normalization
+
+These services have distinct responsibilities and merging them would create unnecessary coupling.
+
+**Endpoints:**
+- Public tracking: `GET /api/tracking/:trackingNumber` (by waybill)
+- Public tracking: `GET /api/tracking/phone/:phone` (by phone number)
+- Staff list: `GET /api/items` (all items)
+- Customer items: `GET /api/items/mine` (authenticated user's items)
+- Status update: `POST /api/items/:id/status` (log checkpoint)
+- Full detail: `GET /api/items/:id/tracking` (internal view)
 
 | Field | Current Location | Action |
 |-------|-----------------|--------|

@@ -1,7 +1,7 @@
 {
-  "name": "ghana-logistics-backend",
+  "name": "inc-logistics-backend",
   "version": "1.0.0",
-  "description": "Ghana Logistics Co. - Backend API",
+  "description": "I&C Logistics - Backend API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

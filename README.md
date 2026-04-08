@@ -1,6 +1,6 @@
-# Ghana Logistics Co. — Backend API
+# I&C Logistics — Backend API
 
-Node.js / Express / MongoDB backend for the Ghana Logistics platform.
+Node.js / Express / MongoDB backend for the I&C Logistics platform.
 Built by Yongi Technologies.
 
 ---
