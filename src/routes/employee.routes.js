@@ -80,6 +80,6 @@ const { authenticate, authorize } = require("../middleware/auth.middleware");
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.get("/users", authenticate, authorize("employee"), ctrl.listUsers);
+router.get("/users", authenticate, authorize("employee", "admin"), ctrl.listUsers);
 
 module.exports = router;

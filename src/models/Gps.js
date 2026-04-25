@@ -8,7 +8,7 @@ const gpsDeviceSchema = new mongoose.Schema(
   {
     deviceId:   { type: String, required: true, unique: true, index: true }, // hardware serial / IMEI
     label:      { type: String }, // e.g. "Tracker-007"
-    shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Shipment", default: null, index: true },
+    shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentItem", default: null, index: true },
     isActive:   { type: Boolean, default: true },
     lastPing:   { type: Date },
     lastCoords: { type: [Number] }, // [lng, lat]
@@ -23,7 +23,7 @@ const gpsDeviceSchema = new mongoose.Schema(
  */
 const gpsPingSchema = new mongoose.Schema({
   deviceId:   { type: String, required: true, index: true },
-  shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Shipment", index: true },
+  shipmentId: { type: mongoose.Schema.Types.ObjectId, ref: "ShipmentItem", index: true },
   coordinates: {
     type: [Number], // [lng, lat]
     required: true,

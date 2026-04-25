@@ -11,9 +11,10 @@ const {
 } = require("../services/batch.service");
 const { respond } = require("../utils/response");
 
-// Fields stripped before returning data to public/customer callers
+// Fields stripped before returning data to public/customer callers.
+// containerRef is the physical container number (e.g. MSBU7337022) — staff-only.
 const PUBLIC_ITEM_SELECT =
-  "-staffNotes -customerId -heldReason -reassignedTo -stageHistory";
+  "-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef";
 
 // ─── File validation ──────────────────────────────────────────────────────────
 

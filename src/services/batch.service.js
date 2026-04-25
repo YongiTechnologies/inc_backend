@@ -441,7 +441,7 @@ async function processShippedBatch(parsedData, uploadedBy) {
 async function lookupByPhone(normalised) {
   const items = await ShipmentItem.find({ customerPhone: normalised })
     .sort({ updatedAt: -1 })
-    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory")
+    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
     .populate("intakeBatch", "batchCode stage createdAt")
     .populate("shippedBatch", "batchCode stage createdAt");
   return items;
@@ -452,7 +452,7 @@ async function lookupByPhone(normalised) {
  */
 async function lookupByWaybill(waybill) {
   const item = await ShipmentItem.findOne({ waybillNo: waybill })
-    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory")
+    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
     .populate("intakeBatch", "batchCode stage createdAt")
     .populate("shippedBatch", "batchCode stage createdAt");
   return item;

@@ -57,16 +57,17 @@ if (process.env.NODE_ENV !== "production" || process.env.SWAGGER_ENABLED === "tr
 }
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
-// DISABLED FOR TESTING - Will re-enable in production
-// const general = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
-// const auth    = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
-// const tracker = rateLimit({ windowMs: 60 * 1000, max: 30 });
-// const contact = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 }); // 5 requests per hour for contact form
+const general = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
+const auth    = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const tracker = rateLimit({ windowMs: 60 * 1000, max: 30 });
+const contact = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
+const upload  = rateLimit({ windowMs: 60 * 60 * 1000, max: 20 });
 
-// app.use("/api", general);
-// app.use("/api/auth", auth);
-// app.use("/api/tracking", tracker);
-// app.use("/api/contact", contact);
+app.use("/api", general);
+app.use("/api/auth", auth);
+app.use("/api/tracking", tracker);
+app.use("/api/contact", contact);
+app.use("/api/batches", upload);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api/auth",     authRoutes);

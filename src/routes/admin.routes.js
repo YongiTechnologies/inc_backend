@@ -3,6 +3,8 @@ const router  = express.Router();
 const ctrl    = require("../controllers/admin.controller");
 const { authenticate, authorize } = require("../middleware/auth.middleware");
 const { validate, validators } = require("../utils/validators");
+const { runCleanup } = require("../services/cleanup.service");
+const { respond } = require("../utils/response");
 
 /**
  * @swagger
@@ -333,5 +335,12 @@ router.patch("/users/:id", authenticate, authorize("admin"), ctrl.updateUser);
  *               $ref: '#/components/schemas/Error500'
  */
 router.get("/audit-logs", authenticate, authorize("admin"), ctrl.getAuditLogs);
+
+router.post("/cleanup", authenticate, authorize("admin"), async (req, res, next) => {
+  try {
+    const results = await runCleanup();
+    return respond(res, 200, true, "Cleanup complete", results);
+  } catch (err) { next(err); }
+});
 
 module.exports = router;

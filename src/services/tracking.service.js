@@ -291,6 +291,9 @@ function buildItemResponse(item, options = {}) {
     timestamp:        stage.updatedAt,
   }));
 
+  // containerRef (physical container number, e.g. MSBU7337022) is intentionally
+  // omitted from this response. This function is the source for the public
+  // /api/tracking/:trackingNumber endpoint — containerRef is staff-only.
   const response = {
     waybillNo:        item.waybillNo,
     invoiceNo:        item.invoiceNo,

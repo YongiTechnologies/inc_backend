@@ -94,4 +94,17 @@ async function sendPasswordChanged({ to, name }) {
   });
 }
 
-module.exports = { sendTrackingUpdate, sendPasswordReset, sendPasswordChanged };
+async function sendEmail({ to, subject, html }) {
+  if (!process.env.SMTP_USER) {
+    console.warn("[Email] SMTP_USER not configured — skipping email send");
+    return;
+  }
+  await getTransporter().sendMail({
+    from: process.env.EMAIL_FROM || "I&C Logistics Co. <no-reply@inclogistics.com>",
+    to,
+    subject,
+    html,
+  });
+}
+
+module.exports = { sendTrackingUpdate, sendPasswordReset, sendPasswordChanged, sendEmail };
