@@ -55,10 +55,14 @@ async function findUserByPhone(normalised) {
   return user ? user._id : null;
 }
 
-function intakeBatchCode(date) {
+function intakeBatchCode(date, filename) {
   const d   = date instanceof Date ? date : new Date(date);
   const iso = isNaN(d) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
-  return `INTAKE-${iso}`;
+  // Include a sanitised filename so two different files on the same day get different codes
+  const name = filename
+    ? filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").toLowerCase()
+    : "";
+  return name ? `INTAKE-${iso}-${name}` : `INTAKE-${iso}`;
 }
 
 // ─── Parser: Intake sheet ─────────────────────────────────────────────────────
@@ -276,10 +280,10 @@ class DuplicateBatchError extends Error {
 
 // ─── Processor: Intake batch ──────────────────────────────────────────────────
 
-async function processIntakeBatch(parsedData, uploadedBy) {
+async function processIntakeBatch(parsedData, uploadedBy, filename) {
   const { items, skippedRows, batchDate } = parsedData;
 
-  const batchCode = intakeBatchCode(batchDate);
+  const batchCode = intakeBatchCode(batchDate, filename);
   const existing  = await Batch.findOne({ batchCode, stage: "intake" });
   if (existing) throw new DuplicateBatchError(batchCode, existing);
 
