@@ -3,6 +3,7 @@ const Batch        = require("../models/Batch");
 const ShipmentItem = require("../models/ShipmentItem");
 const audit        = require("../services/audit.service");
 const {
+  DuplicateBatchError,
   parseIntakeSheet,
   parseShippedSheet,
   processIntakeBatch,
@@ -50,6 +51,12 @@ async function uploadIntake(req, res, next) {
     });
     return respond(res, 201, true, "Intake batch processed successfully", result);
   } catch (err) {
+    if (err instanceof DuplicateBatchError) {
+      return respond(res, 409, false, `This intake file has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
+        batchCode:  err.batchCode,
+        uploadedAt: err.uploadedAt,
+      });
+    }
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
     next(err);
   }
@@ -72,6 +79,12 @@ async function uploadShipped(req, res, next) {
     });
     return respond(res, 201, true, "Shipped batch processed successfully", result);
   } catch (err) {
+    if (err instanceof DuplicateBatchError) {
+      return respond(res, 409, false, `This packing list has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
+        batchCode:  err.batchCode,
+        uploadedAt: err.uploadedAt,
+      });
+    }
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
     next(err);
   }
