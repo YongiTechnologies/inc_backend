@@ -263,13 +263,28 @@ function parseShippedSheet(buffer) {
   };
 }
 
+// ─── Custom error for duplicate batch uploads ─────────────────────────────────
+
+class DuplicateBatchError extends Error {
+  constructor(batchCode, existingBatch) {
+    super(`Batch already uploaded`);
+    this.name       = "DuplicateBatchError";
+    this.batchCode  = batchCode;
+    this.uploadedAt = existingBatch.createdAt;
+  }
+}
+
 // ─── Processor: Intake batch ──────────────────────────────────────────────────
 
 async function processIntakeBatch(parsedData, uploadedBy) {
   const { items, skippedRows, batchDate } = parsedData;
 
+  const batchCode = intakeBatchCode(batchDate);
+  const existing  = await Batch.findOne({ batchCode, stage: "intake" });
+  if (existing) throw new DuplicateBatchError(batchCode, existing);
+
   const batch = await Batch.create({
-    batchCode:  intakeBatchCode(batchDate),
+    batchCode,
     stage:      "intake",
     uploadedBy,
     skippedRows,
@@ -320,6 +335,9 @@ async function processShippedBatch(parsedData, uploadedBy) {
     blNumber, sealNumber, volume, loadingDate, etd, eta,
     items, skippedRows,
   } = parsedData;
+
+  const existing = await Batch.findOne({ batchCode, stage: "shipped" });
+  if (existing) throw new DuplicateBatchError(batchCode, existing);
 
   const batch = await Batch.create({
     batchCode,
@@ -486,6 +504,7 @@ async function lookupByWaybill(waybill) {
 }
 
 module.exports = {
+  DuplicateBatchError,
   parseIntakeSheet,
   parseShippedSheet,
   processIntakeBatch,
