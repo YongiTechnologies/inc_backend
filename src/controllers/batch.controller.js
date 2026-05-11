@@ -39,7 +39,7 @@ async function uploadIntake(req, res, next) {
   let batch;
   try {
     const parsed = parseIntakeSheet(req.file.buffer);
-    const result = await processIntakeBatch(parsed, req.user._id);
+    const result = await processIntakeBatch(parsed, req.user._id, req.file.originalname);
     batch = result.batch;
     await audit.log({
       performedBy: req.user._id,
