@@ -1,7 +1,8 @@
-const XLSX         = require("xlsx");
-const Batch        = require("../models/Batch");
-const ShipmentItem = require("../models/ShipmentItem");
-const User         = require("../models/User");
+const XLSX             = require("xlsx");
+const Batch            = require("../models/Batch");
+const ShipmentItem     = require("../models/ShipmentItem");
+const ContainerLoading = require("../models/ContainerLoading");
+const User             = require("../models/User");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -427,6 +428,32 @@ async function processShippedBatch(parsedData, uploadedBy) {
   const heldItems  = heldResult.modifiedCount;
   const totalItems = newItems + matchedItems;
   await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems, matchedItems, heldItems });
+
+  // ── Auto-create or update the ContainerLoading record ─────────────────────
+  if (containerNumber) {
+    const containerData = {
+      vesselName:  undefined,
+      blNumber:    blNumber   || undefined,
+      sealNumber:  sealNumber || undefined,
+      volume:      volume     || undefined,
+      loadingDate: loadingDate || undefined,
+      etd:         etd ? new Date(etd) : undefined,
+      eta:         eta ? new Date(eta) : undefined,
+      batchRef:    batch._id,
+      updatedBy:   uploadedBy,
+    };
+    // Strip undefined so $set only touches fields that arrived in this upload
+    Object.keys(containerData).forEach((k) => containerData[k] === undefined && delete containerData[k]);
+
+    await ContainerLoading.findOneAndUpdate(
+      { containerNumber: containerNumber.toUpperCase().trim() },
+      {
+        $set:         containerData,
+        $setOnInsert: { status: "shipped", createdBy: uploadedBy },
+      },
+      { upsert: true, new: true },
+    );
+  }
 
   return {
     batch: await Batch.findById(batch._id),
