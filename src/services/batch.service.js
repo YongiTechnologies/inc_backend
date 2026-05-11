@@ -55,6 +55,12 @@ async function findUserByPhone(normalised) {
   return user ? user._id : null;
 }
 
+function safeDate(raw) {
+  if (raw === null || raw === undefined) return null;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function intakeBatchCode(date, filename) {
   const d   = date instanceof Date ? date : new Date(date);
   const iso = isNaN(d) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
@@ -95,7 +101,7 @@ function parseIntakeSheet(buffer) {
     const phone     = normalisePhone(phoneRaw);
     const qty       = parseQuantity(qtyRaw);
     const invoiceNo = invoiceRaw ? String(invoiceRaw).trim() : null;
-    const date      = dateRaw instanceof Date ? dateRaw : (dateRaw ? new Date(dateRaw) : null);
+    const date      = safeDate(dateRaw);
     if (date && !batchDate) batchDate = date;
 
     for (const waybill of waybills) {
@@ -152,7 +158,7 @@ function parseShippedSheet(buffer) {
   const etd                = meta["ETD"]                  || null;
   const eta                = meta["ETA"]                  || null;
 
-  const loadingDate = loadingDateRaw ? new Date(loadingDateRaw) : null;
+  const loadingDate = safeDate(loadingDateRaw);
 
   // Use packing list number + container as the batch code
   const batchCode = packingListNumber
@@ -459,8 +465,8 @@ async function processShippedBatch(parsedData, uploadedBy) {
       sealNumber:  sealNumber || undefined,
       volume:      volume     || undefined,
       loadingDate: loadingDate || undefined,
-      etd:         etd ? new Date(etd) : undefined,
-      eta:         eta ? new Date(eta) : undefined,
+      etd:         safeDate(etd) || undefined,
+      eta:         safeDate(eta) || undefined,
       batchRef:    batch._id,
       updatedBy:   uploadedBy,
     };
