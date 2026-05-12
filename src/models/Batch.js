@@ -12,7 +12,7 @@ const containerRefSchema = new mongoose.Schema(
 const batchSchema = new mongoose.Schema(
   {
     batchCode:     { type: String, required: true, index: true },
-    stage:         { type: String, enum: ["intake", "shipped"], required: true },
+    stage:         { type: String, enum: ["intake", "shipped", "arrived"], required: true },
     uploadedBy:    { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     containerRefs: [containerRefSchema], // container details for shipped batches
     totalItems:    { type: Number, default: 0 },

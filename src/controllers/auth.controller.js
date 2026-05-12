@@ -113,6 +113,12 @@ async function resetPassword(req, res, next) {
     user.passwordResetExpires = undefined;
     await user.save();
 
+    // Revoke all active sessions so stolen tokens can't be used post-reset
+    await RefreshToken.updateMany(
+      { userId: user._id, isRevoked: false },
+      { isRevoked: true, revokedAt: new Date() }
+    );
+
     await emailService.sendPasswordChanged({
       to: user.email,
       name: user.name,

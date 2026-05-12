@@ -19,7 +19,7 @@ const STATUS_TRANSITIONS = {
   returned:         [],           // terminal
   // Batch workflow statuses
   in_warehouse:     ["shipped", "held", "pending"],
-  shipped:          ["pending", "in_transit", "held"],
+  shipped:          ["pending", "in_transit", "customs", "held"],
   held:             ["in_warehouse", "shipped", "pending"],
 };
 

@@ -118,6 +118,38 @@ router.post("/batches/intake",  ...staffOnly, upload.single("file"), ctrl.upload
  */
 router.post("/batches/shipped", ...staffOnly, upload.single("file"), ctrl.uploadShipped);
 
+/**
+ * @swagger
+ * /batches/arrived:
+ *   post:
+ *     tags: [Batches]
+ *     summary: Upload Stage 3 — Container arrived in Ghana (customs clearance)
+ *     description: >
+ *       Upload the arrival packing list (same CTR_INVOICE format as Stage 2).
+ *       Updates matched items from `shipped` → `customs`. Items not present in
+ *       this upload stay as `shipped` — they may arrive on a future shipment.
+ *       Also marks the ContainerLoading record as `arrived` with today's date.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201: { description: Arrived batch processed }
+ *       400: { description: Invalid file }
+ *       401: { description: Unauthorized }
+ *       409: { description: Already uploaded }
+ */
+router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploadArrived);
+
 // =============================================================================
 // BATCH LIST & DETAIL (staff)
 // =============================================================================
@@ -133,7 +165,7 @@ router.post("/batches/shipped", ...staffOnly, upload.single("file"), ctrl.upload
  *     parameters:
  *       - in: query
  *         name: stage
- *         schema: { type: string, enum: [intake, shipped] }
+ *         schema: { type: string, enum: [intake, shipped, arrived] }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }

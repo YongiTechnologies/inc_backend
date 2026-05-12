@@ -102,8 +102,9 @@ const shipmentItemSchema = new mongoose.Schema(
     deliverySignature:  { type: String }, // URL to signature
 
     // ── Batch references ──────────────────────────────────────────────────────
-    intakeBatch:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
-    shippedBatch: { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
+    intakeBatch:   { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
+    shippedBatch:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
+    arrivedBatch:  { type: mongoose.Schema.Types.ObjectId, ref: "Batch", default: null },
 
     // ── Staff-managed fields ──────────────────────────────────────────────────
     heldReason:         { type: String },
@@ -127,8 +128,9 @@ const shipmentItemSchema = new mongoose.Schema(
 
 // Indexes for common queries
 shipmentItemSchema.index({ customerPhone: 1, status: 1 });
-shipmentItemSchema.index({ intakeBatch:  1, status: 1 });
-shipmentItemSchema.index({ shippedBatch: 1, status: 1 });
+shipmentItemSchema.index({ intakeBatch:   1, status: 1 });
+shipmentItemSchema.index({ shippedBatch:  1, status: 1 });
+shipmentItemSchema.index({ arrivedBatch:  1, status: 1 });
 shipmentItemSchema.index({ status: 1, updatedAt: -1 });
 shipmentItemSchema.index({ waybillNo: 1 }); // Fast lookup by tracking number
 shipmentItemSchema.index({ customerId: 1, createdAt: -1 }); // Customer's items

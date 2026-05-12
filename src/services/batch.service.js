@@ -490,6 +490,113 @@ async function processShippedBatch(parsedData, uploadedBy) {
   };
 }
 
+// ─── Processor: Arrived batch (Ghana port / customs clearance) ────────────────
+//
+// Reuses the same packing list format as the shipped batch.
+// Updates matched items from `shipped` → `customs` (Ghana customs clearance).
+// Items not found in this list remain `shipped` — they may arrive later.
+// Also updates the ContainerLoading record status to "arrived".
+
+async function processArrivedBatch(parsedData, uploadedBy) {
+  const {
+    batchCode: rawCode, containerNumber, packingListNumber,
+    blNumber, sealNumber, volume, loadingDate, etd, eta,
+    items, skippedRows,
+  } = parsedData;
+
+  // Use ARR- prefix so the same packing list can be uploaded for both shipped & arrived
+  const batchCode = rawCode.replace(/^PKL-|^CTR-|^SHIPPED-/, (m) =>
+    m.startsWith("PKL-") ? "ARR-" : m.startsWith("CTR-") ? "ARR-CTR-" : "ARR-"
+  );
+
+  const existing = await Batch.findOne({ batchCode, stage: "arrived" });
+  if (existing) throw new DuplicateBatchError(batchCode, existing);
+
+  const batch = await Batch.create({
+    batchCode,
+    stage:      "arrived",
+    uploadedBy,
+    skippedRows,
+    containerRefs: containerNumber
+      ? [{ code: packingListNumber || batchCode, id: containerNumber, date: loadingDate }]
+      : [],
+    notes: [
+      blNumber   ? `BL: ${blNumber}`     : null,
+      sealNumber ? `Seal: ${sealNumber}` : null,
+      volume     ? `Volume: ${volume}`   : null,
+      etd        ? `ETD: ${etd}`         : null,
+      eta        ? `ETA: ${eta}`         : null,
+    ].filter(Boolean).join(" | ") || undefined,
+  });
+
+  let matchedItems = 0;
+  let newItems     = 0;
+
+  for (const item of items) {
+    const existing = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
+
+    if (existing) {
+      // Skip if already at or past customs stage
+      const pastStages = ["customs", "out_for_delivery", "delivered", "failed", "returned"];
+      if (pastStages.includes(existing.status)) {
+        matchedItems++;
+        continue;
+      }
+      existing.status       = "customs";
+      existing.arrivedBatch = batch._id;
+      existing.stageHistory.push({
+        stage:     "arrived",
+        status:    "customs",
+        batchId:   batch._id,
+        updatedAt: new Date(),
+        note:      `Arrived in Ghana — pending customs clearance (${batchCode})`,
+      });
+      await existing.save();
+      matchedItems++;
+    } else {
+      // Item never recorded — create directly at customs stage
+      const customerId = await findUserByPhone(item.customerPhone);
+      await ShipmentItem.create({
+        ...item,
+        customerId,
+        status:       "customs",
+        arrivedBatch: batch._id,
+        stageHistory: [{
+          stage:     "arrived",
+          status:    "customs",
+          batchId:   batch._id,
+          updatedAt: new Date(),
+          note:      `Created directly via arrived batch ${batchCode}`,
+        }],
+      });
+      newItems++;
+    }
+  }
+
+  const totalItems = matchedItems + newItems;
+  await Batch.findByIdAndUpdate(batch._id, { totalItems, matchedItems, newItems, heldItems: 0 });
+
+  // Mark the ContainerLoading record as arrived with actual arrival date
+  if (containerNumber) {
+    await ContainerLoading.findOneAndUpdate(
+      { containerNumber: containerNumber.toUpperCase().trim() },
+      {
+        $set: {
+          status:            "arrived",
+          actualArrivalDate: new Date(),
+          updatedBy:         uploadedBy,
+        },
+      }
+    );
+  }
+
+  return {
+    batch: await Batch.findById(batch._id),
+    skippedRows,
+    summary: `${totalItems} items processed. ${newItems} new, ${matchedItems} updated to customs/arrived.`,
+  };
+}
+
 /**
  * Look up shipment items by phone number.
  */
@@ -519,6 +626,7 @@ module.exports = {
   parseShippedSheet,
   processIntakeBatch,
   processShippedBatch,
+  processArrivedBatch,
   normalisePhone,
   lookupByPhone,
   lookupByWaybill,
