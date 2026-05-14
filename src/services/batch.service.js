@@ -273,6 +273,207 @@ function parseShippedSheet(buffer) {
   };
 }
 
+// ─── Parser: Arrived sheet (Goods Arrived List — Ghana port) ─────────────────
+//
+// Supports two layouts:
+//
+// Layout A — same packing-list structure (most common):
+//   Row 1:  CONTAINER NUMBER  | MSBU7337022   (or CTR NUMBER)
+//   Row 2:  ARRIVAL DATE      | 15/04/2026
+//   Row 3:  BL NUMBER         | <optional>
+//   Row 4–8: any extra metadata rows
+//   Row 9:  HEADER ROW        | JOB NUMBER, CNEE NAME, CUSTOMER NO / PHONE NUMBER, …
+//   Row 10+: DATA ROWS
+//
+// Layout B — simple flat list (no metadata block):
+//   Row 1:  header            | JOB NUMBER  (detected when col-0 header contains "JOB")
+//   Row 2+: DATA ROWS         | waybillNo, customerPhone, arrivalDate, containerNo
+
+function parseArrivedSheet(buffer) {
+  const wb   = XLSX.read(buffer, { type: "buffer", cellDates: true });
+  const ws   = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+  if (!rows.length) return { batchCode: null, containerNumber: null, arrivalDate: null, waybills: [], skippedRows: [] };
+
+  // ── Detect layout ────────────────────────────────────────────────────────────
+  const firstKey = rows[0] && rows[0][0] ? String(rows[0][0]).trim().toUpperCase() : "";
+  const isLayoutB = firstKey.includes("JOB") || firstKey.includes("WAYBILL");
+
+  let containerNumber = null;
+  let arrivalDate     = null;
+  let blNumber        = null;
+  let dataStartIdx    = 0;
+  let colIndex        = {};
+
+  if (isLayoutB) {
+    // Layout B: first row is the header
+    const headerRow = rows[0] || [];
+    headerRow.forEach((h, i) => { if (h) colIndex[String(h).trim().toUpperCase()] = i; });
+    dataStartIdx = 1;
+  } else {
+    // Layout A: scan rows 0-7 for metadata keys
+    const META_KEYS = {
+      "CONTAINER NUMBER": "container",
+      "CTR NUMBER":        "container",
+      "ARRIVAL DATE":      "arrival",
+      "ARRIVED DATE":      "arrival",
+      "BL NUMBER":         "bl",
+    };
+
+    for (let i = 0; i < Math.min(8, rows.length); i++) {
+      const row = rows[i];
+      if (!row || !row[0]) continue;
+      const key = String(row[0]).trim().toUpperCase();
+      const val = row[1] !== null && row[1] !== undefined ? row[1] : null;
+      if (META_KEYS[key] === "container") containerNumber = val ? String(val).trim() : null;
+      if (META_KEYS[key] === "arrival")   arrivalDate     = safeDate(val);
+      if (META_KEYS[key] === "bl")        blNumber        = val ? String(val).trim() : null;
+    }
+
+    // Row 9 (index 8) is the header
+    const HEADER_IDX = 8;
+    const headerRow  = rows[HEADER_IDX] || [];
+    headerRow.forEach((h, i) => { if (h) colIndex[String(h).trim().toUpperCase()] = i; });
+    dataStartIdx = HEADER_IDX + 1;
+  }
+
+  const get = (row, key) => {
+    const i = colIndex[key];
+    return i !== undefined ? row[i] : null;
+  };
+
+  const waybills    = [];
+  const skippedRows = [];
+
+  for (let i = dataStartIdx; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
+
+    const jobRaw   = get(row, "JOB NUMBER") ?? get(row, "WAYBILL") ?? get(row, "WAYBILL NO") ?? row[0];
+    const phoneRaw = get(row, "PHONE NUMBER") ?? get(row, "CUSTOMER NO") ?? get(row, "CUST NO") ?? row[1];
+
+    if (!jobRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
+
+    const waybillList = splitWaybills(jobRaw);
+    if (!waybillList.length) { skippedRows.push(i + 1); continue; }
+
+    // Pick up arrival date per-row if not set at metadata level (Layout B)
+    if (!arrivalDate) {
+      const dateCand = get(row, "ARRIVAL DATE") ?? get(row, "DATE") ?? row[2];
+      arrivalDate = safeDate(dateCand);
+    }
+
+    // Pick up container number per-row if not set (Layout B)
+    if (!containerNumber) {
+      const ctrCand = get(row, "CONTAINER") ?? get(row, "CTR") ?? get(row, "CONTAINER NUMBER") ?? row[3];
+      if (ctrCand) containerNumber = String(ctrCand).trim().toUpperCase();
+    }
+
+    for (const waybill of waybillList) {
+      waybills.push(waybill);
+    }
+  }
+
+  const batchCode = containerNumber
+    ? `ARR-${containerNumber}`
+    : arrivalDate
+    ? `ARR-${(arrivalDate instanceof Date ? arrivalDate : new Date()).toISOString().slice(0, 10)}`
+    : `ARR-${new Date().toISOString().slice(0, 10)}`;
+
+  return { batchCode, containerNumber, arrivalDate, blNumber, waybills, skippedRows };
+}
+
+// ─── Processor: Arrived batch ─────────────────────────────────────────────────
+
+async function processArrivedBatch(parsedData, uploadedBy) {
+  const { batchCode, containerNumber, arrivalDate, blNumber, waybills, skippedRows } = parsedData;
+
+  const existing = await Batch.findOne({ batchCode, stage: "arrived" });
+  if (existing) throw new DuplicateBatchError(batchCode, existing);
+
+  const batch = await Batch.create({
+    batchCode,
+    stage: "arrived",
+    uploadedBy,
+    skippedRows,
+    containerRefs: containerNumber
+      ? [{ code: batchCode, id: containerNumber, date: arrivalDate }]
+      : [],
+    notes: [
+      blNumber    ? `BL: ${blNumber}`                             : null,
+      arrivalDate ? `Arrived: ${arrivalDate.toISOString().slice(0, 10)}` : null,
+    ].filter(Boolean).join(" | ") || undefined,
+  });
+
+  let matchedItems = 0;
+  let newItems     = 0;
+
+  // ── Strategy 1: update by explicit waybill list ────────────────────────────
+  if (waybills.length > 0) {
+    for (const waybill of waybills) {
+      const item = await ShipmentItem.findOne({ waybillNo: waybill });
+      if (!item) { newItems++; continue; } // count as "not matched" (no auto-create)
+
+      item.status       = "customs";
+      item.arrivedBatch = batch._id;
+      if (arrivalDate) item.arrivalDate = arrivalDate;
+      item.stageHistory.push({
+        stage:     "arrived",
+        status:    "customs",
+        batchId:   batch._id,
+        updatedAt: new Date(),
+        note:      `Arrived at Ghana port via ${batchCode}`,
+      });
+      await item.save();
+      matchedItems++;
+    }
+  }
+
+  // ── Strategy 2: fall back to updating all "shipped" items in this container ─
+  if (matchedItems === 0 && containerNumber) {
+    const result = await ShipmentItem.updateMany(
+      { containerRef: containerNumber.toUpperCase(), status: "shipped" },
+      {
+        $set:  { status: "customs", arrivedBatch: batch._id, ...(arrivalDate ? { arrivalDate } : {}) },
+        $push: {
+          stageHistory: {
+            stage:     "arrived",
+            status:    "customs",
+            batchId:   batch._id,
+            updatedAt: new Date(),
+            note:      `Arrived at Ghana port — container ${containerNumber}`,
+          },
+        },
+      }
+    );
+    matchedItems = result.modifiedCount;
+  }
+
+  // ── Update ContainerLoading record ─────────────────────────────────────────
+  if (containerNumber) {
+    await ContainerLoading.findOneAndUpdate(
+      { containerNumber: containerNumber.toUpperCase() },
+      {
+        $set: {
+          status:            "arrived",
+          actualArrivalDate: arrivalDate || new Date(),
+          updatedBy:         uploadedBy,
+        },
+      }
+    );
+  }
+
+  const totalItems = matchedItems;
+  await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems: 0, matchedItems, heldItems: 0 });
+
+  return {
+    batch: await Batch.findById(batch._id),
+    skippedRows,
+    summary: `${totalItems} items marked as arrived (customs). Container: ${containerNumber || "N/A"}.`,
+  };
+}
+
 // ─── Custom error for duplicate batch uploads ─────────────────────────────────
 
 class DuplicateBatchError extends Error {
@@ -517,8 +718,10 @@ module.exports = {
   DuplicateBatchError,
   parseIntakeSheet,
   parseShippedSheet,
+  parseArrivedSheet,
   processIntakeBatch,
   processShippedBatch,
+  processArrivedBatch,
   normalisePhone,
   lookupByPhone,
   lookupByWaybill,

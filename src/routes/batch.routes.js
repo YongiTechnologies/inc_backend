@@ -116,7 +116,41 @@ router.post("/batches/intake",  ...staffOnly, upload.single("file"), ctrl.upload
  *       400: { description: Invalid file }
  *       401: { description: Unauthorized }
  */
-router.post("/batches/shipped", ...staffOnly, upload.single("file"), ctrl.uploadShipped);
+router.post("/batches/shipped",  ...staffOnly, upload.single("file"), ctrl.uploadShipped);
+
+/**
+ * @swagger
+ * /batches/arrived:
+ *   post:
+ *     tags: [Batches]
+ *     summary: Upload Stage 3 — Goods arrived list (Ghana port)
+ *     description: >
+ *       Upload the goods arrived list. Supports two layouts.
+ *       Layout A (packing-list style): metadata rows 1–8 contain CONTAINER NUMBER and
+ *       ARRIVAL DATE; row 9 is the header; data from row 10.
+ *       Layout B (flat list): row 1 is the header starting with JOB NUMBER; data from row 2.
+ *       Matched items are updated from `shipped` → `customs`. The ContainerLoading record
+ *       is updated to status `arrived` with the actual arrival date.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201: { description: Arrived batch processed }
+ *       400: { description: Invalid file }
+ *       401: { description: Unauthorized }
+ *       409: { description: Already uploaded }
+ */
+router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploadArrived);
 
 // =============================================================================
 // BATCH LIST & DETAIL (staff)

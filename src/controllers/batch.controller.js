@@ -6,8 +6,10 @@ const {
   DuplicateBatchError,
   parseIntakeSheet,
   parseShippedSheet,
+  parseArrivedSheet,
   processIntakeBatch,
   processShippedBatch,
+  processArrivedBatch,
   normalisePhone,
 } = require("../services/batch.service");
 const { respond } = require("../utils/response");
@@ -81,6 +83,34 @@ async function uploadShipped(req, res, next) {
   } catch (err) {
     if (err instanceof DuplicateBatchError) {
       return respond(res, 409, false, `This packing list has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
+        batchCode:  err.batchCode,
+        uploadedAt: err.uploadedAt,
+      });
+    }
+    if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
+    next(err);
+  }
+}
+
+async function uploadArrived(req, res, next) {
+  if (!validateFile(req, res)) return;
+  let batch;
+  try {
+    const parsed = parseArrivedSheet(req.file.buffer);
+    const result = await processArrivedBatch(parsed, req.user._id);
+    batch = result.batch;
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "BATCH_ARRIVED_UPLOAD",
+      targetModel: "Batch",
+      targetId:    batch._id,
+      details:     { batchCode: batch.batchCode, totalItems: batch.totalItems },
+      ip:          req.ip,
+    });
+    return respond(res, 201, true, "Arrived batch processed successfully", result);
+  } catch (err) {
+    if (err instanceof DuplicateBatchError) {
+      return respond(res, 409, false, `This arrived list has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
         batchCode:  err.batchCode,
         uploadedAt: err.uploadedAt,
       });
@@ -415,6 +445,7 @@ async function updateItem(req, res, next) {
 module.exports = {
   uploadIntake,
   uploadShipped,
+  uploadArrived,
   listBatches,
   getBatch,
   getBatchItems,
