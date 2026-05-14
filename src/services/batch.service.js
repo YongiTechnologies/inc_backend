@@ -191,7 +191,7 @@ function parseShippedSheet(buffer) {
     if (!row) continue;
 
     const jobNumberRaw = get(row, "JOB NUMBER");
-    const phoneRaw     = get(row, "PHONE NUMBER");
+    const phoneRaw     = get(row, "PHONE NUMBER") ?? get(row, "CUSTOMER NO") ?? get(row, "CUST NO") ?? get(row, "CUSTOMER NUMBER");
 
     // Skip empty or summary rows
     if (!jobNumberRaw && !phoneRaw) {
