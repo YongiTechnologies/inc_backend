@@ -16,7 +16,11 @@ async function getCustomerStats(req, res, next) {
     const orConditions = [{ customerId }];
     if (user.phone) {
       const norm = normalisePhone(user.phone);
-      if (norm) orConditions.push({ customerPhone: norm });
+      if (norm) {
+        const last9 = norm.slice(-9);
+        orConditions.push({ customerPhone: norm });
+        orConditions.push({ customerPhone: { $regex: last9 + "$" } });
+      }
     }
 
     const items = await ShipmentItem.find({ $or: orConditions })

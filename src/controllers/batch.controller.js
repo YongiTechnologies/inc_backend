@@ -257,7 +257,11 @@ async function getMyBatchItems(req, res, next) {
     const orConditions = [{ customerId: user._id }];
     if (user.phone) {
       const norm = normalisePhone(user.phone);
-      if (norm) orConditions.push({ customerPhone: norm });
+      if (norm) {
+        const last9 = norm.slice(-9);
+        orConditions.push({ customerPhone: norm });
+        orConditions.push({ customerPhone: { $regex: last9 + "$" } });
+      }
     }
 
     const filter = { $or: orConditions };
