@@ -63,7 +63,7 @@ function intakeBatchCode(date, filename) {
 
 const COLUMN_ALIASES = {
   TRACKING_NO:    ["TRACKING N0.", "TRACKING NO.", "TRACKING NUMBER", "WAYBILL", "WAYBILL NO", "JOB NUMBER", "JOB NO."],
-  CBM:            ["CBM", "CBM PER TRACKING", "C.B.M", "CBM (M3)"],
+  CBM:            ["CBM", "CBM PER TRACKING", "C.B.M", "CBM (M3)", "C.B.M PER TRACKING", "CBM PER TRACKING NO", "CBM PER TRACKING NO.", "CBM PER TRACKING NUMBER", "VOLUME (CBM)", "VOLUME CBM", "CBM VOLUME", "TOTAL CBM", "CBM TOTAL"],
   CONTACT:        ["CONTACT", "PHONE", "PHONE NUMBER", "CUSTOMER NO", "CUSTOMER NUMBER"],
   QTY:            ["QTY PER TRACKING", "QUANTITY", "QTY"],
   GOODS_TYPE:     ["GOODS TYPE", "GOODS"],
@@ -79,6 +79,7 @@ const COLUMN_ALIASES = {
   INVOICE_AMOUNT: ["INVOICE AMOUNT"],
   INVOICE_NO:     ["INVOICE NO", "INVOICE NUMBER", "INVOICE NO.", "INVOICE"],
   INTAKE_DATE:    ["DATE", "INTAKE DATE"],
+  RECEIVING_DATE: ["RECEIVING DATE", "RECEIVE DATE", "RECEIPT DATE", "EXPECTED DELIVERY", "EXPECTED DELIVERY DATE", "DELIVERY DATE", "ARRIVAL DATE PER ITEM"],
 };
 
 const METADATA_ALIASES = {
@@ -87,7 +88,7 @@ const METADATA_ALIASES = {
   BL_NUMBER:        ["BL NUMBER", "B/L NUMBER", "BL NO", "BL NO.", "BL"],
   SEAL_NUMBER:      ["SEAL NUMBER", "SEAL NO", "SEAL NO."],
   VOLUME:           ["VOLUME"],
-  LOADING_DATE:     ["LOADING DATE"],
+  LOADING_DATE:     ["LOADING DATE", "RECEIVING DATE", "RECEIVE DATE", "LOADING/RECEIVING DATE"],
   ETD:              ["ETD"],
   ETA:              ["ETA"],
   BATCH_REF:        ["BATCH REF", "PACKING LIST NUMBER", "PKL NUMBER"],
@@ -301,6 +302,8 @@ function parseUnifiedSheet(buffer) {
       const qty         = parseQuantity(qtyRaw);
       const cbmRaw      = get(row, "CBM");
       const cbm         = (cbmRaw !== null && cbmRaw !== undefined) ? parseFloat(cbmRaw) : null;
+      const receivingDateRaw = get(row, "RECEIVING_DATE");
+      const receivingDateParsed = receivingDateRaw ? safeDate(receivingDateRaw) : null;
       const invoiceRaw  = get(row, "INVOICE_NO");
 
       // Financial fields from packing-list columns
@@ -331,7 +334,8 @@ function parseUnifiedSheet(buffer) {
           interest,
           otherFee,
           invoiceAmount,
-          receivingDate:  metadata.LOADING_DATE || null,
+          receivingDate:      metadata.LOADING_DATE || null,
+          estimatedDelivery:  receivingDateParsed || null,
         };
         if (stage === "intake") {
           item.invoiceNo  = invoiceRaw ? String(invoiceRaw).trim() : null;
@@ -579,6 +583,7 @@ async function processShippedBatch(parsedData, uploadedBy) {
       found.quantity            = item.quantity            ?? found.quantity;
       found.quantityRaw         = item.quantityRaw         || found.quantityRaw;
       found.receivingDate       = item.receivingDate       || found.receivingDate;
+      found.estimatedDelivery   = item.estimatedDelivery   || found.estimatedDelivery;
       found.freightTerm         = item.freightTerm         || found.freightTerm;
       found.freightAmount       = item.freightAmount       ?? found.freightAmount;
       found.loan                = item.loan                ?? found.loan;
