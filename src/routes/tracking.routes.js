@@ -78,8 +78,11 @@ router.get("/tracking/phone/:phone", publicLimiter, ctrl.publicTrackByPhone);
 router.get("/tracking/waybill/:waybill", publicLimiter, ctrl.publicTrackByWaybill);
 
 // ─── Authenticated routes ──────────────────────────────────────────────────────
+// Scope authenticate to /items and /stats only — a bare router.use(authenticate)
+// with no path would intercept unrelated public routes (e.g. /container-loadings)
+// that fall through this router without matching any tracking-specific path.
 
-router.use(authenticate);
+router.use(["/items", "/stats"], authenticate);
 
 /**
  * @swagger
