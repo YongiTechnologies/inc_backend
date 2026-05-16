@@ -17,6 +17,7 @@ const contactRoutes   = require("./routes/contact.routes");
 const oauthRoutes     = require("./routes/oauth.routes");
 const batchRoutes         = require("./routes/batch.routes");
 const containerRoutes     = require("./routes/container.routes");
+const settingsRoutes      = require("./routes/settings.routes");
 const { errorHandler } = require("./middleware/errorHandler");
 const { respond }    = require("./utils/response");
 const swaggerSpec   = require("./config/swagger");
@@ -81,6 +82,7 @@ app.use("/api/dashboard",dashboardRoutes);
 app.use("/api",          contactRoutes);
 app.use("/api",          batchRoutes);
 app.use("/api",          containerRoutes);
+app.use("/api",          settingsRoutes);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
