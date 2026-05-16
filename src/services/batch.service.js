@@ -6,26 +6,16 @@ const User             = require("../models/User");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Normalise a Ghanaian phone number to 233XXXXXXXXX format.
- * Handles: 0XXXXXXXXX, +233XXXXXXXXX, 233XXXXXXXXX, 9-digit bare, and
- * numeric Excel values that lose the leading zero (e.g. 202425612 → 9 digits).
- */
 function normalisePhone(raw) {
   if (raw === null || raw === undefined) return null;
-  // Strip everything except digits
   const digits = String(raw).replace(/\D/g, "").trim();
   if (!digits || digits.length < 7) return null;
   if (digits.startsWith("233")) return digits;
   if (digits.startsWith("0"))   return "233" + digits.slice(1);
-  // 9-digit bare number (Excel dropped the leading zero, e.g. 202425612)
   if (digits.length === 9)      return "233" + digits;
   return digits;
 }
 
-/**
- * Extract the numeric part from quantity strings like "13pallet", "1pallet", "22".
- */
 function parseQuantity(raw) {
   if (raw === null || raw === undefined) return null;
   const str   = String(raw).trim();
@@ -33,9 +23,6 @@ function parseQuantity(raw) {
   return match ? parseFloat(match[1]) : null;
 }
 
-/**
- * Split a waybill string on whitespace — handles cells like "301977756976 301977756989".
- */
 function splitWaybills(raw) {
   if (!raw) return [];
   return String(raw)
@@ -45,9 +32,6 @@ function splitWaybills(raw) {
     .filter(Boolean);
 }
 
-/**
- * Look up a User by normalised phone (last-9-digits fallback for flexibility).
- */
 async function findUserByPhone(normalised) {
   if (!normalised) return null;
   const last9 = normalised.slice(-9);
@@ -64,344 +48,361 @@ function safeDate(raw) {
 function intakeBatchCode(date, filename) {
   const d   = date instanceof Date ? date : new Date(date);
   const iso = isNaN(d) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
-  // Include a sanitised filename so two different files on the same day get different codes
   const name = filename
     ? filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").toLowerCase()
     : "";
   return name ? `INTAKE-${iso}-${name}` : `INTAKE-${iso}`;
 }
 
-// ─── Parser: Intake sheet ─────────────────────────────────────────────────────
-// Format: no header row, 5 columns
-// [0] invoiceNo  [1] waybillNo  [2] customerPhone  [3] quantity  [4] date
+// ─── Column / metadata alias maps ─────────────────────────────────────────────
+//
+// Each entry maps a canonical key to all known column header spellings from
+// real staff-produced spreadsheets. normalizeHeaderCell is applied to both
+// the alias list and every header cell before lookup so spacing/case never
+// matters.
 
-function parseIntakeSheet(buffer) {
-  const wb   = XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const ws   = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+const COLUMN_ALIASES = {
+  TRACKING_NO:    ["TRACKING N0.", "TRACKING NO.", "TRACKING NUMBER", "WAYBILL", "WAYBILL NO", "JOB NUMBER", "JOB NO."],
+  CBM:            ["CBM", "CBM PER TRACKING", "C.B.M", "CBM (M3)"],
+  CONTACT:        ["CONTACT", "PHONE", "PHONE NUMBER", "CUSTOMER NO", "CUSTOMER NUMBER"],
+  QTY:            ["QTY PER TRACKING", "QUANTITY", "QTY"],
+  GOODS_TYPE:     ["GOODS TYPE", "GOODS"],
+  PRODUCT_DESC:   ["PRODUCT DESCRIPTION", "DESCRIPTION"],
+  CUSTOMER_NAME:  ["CUSTOMER NAME", "CNEE NAME", "CNEE"],
+  LOCATION:       ["LOCATION", "DESTINATION", "DESTINATION CITY"],
+  REMARKS:        ["OTHER", "REMARKS", "NOTE"],
+  COLLECT_OF:     ["COLLECT O/F AMOUNT", "FREIGHT AMOUNT"],
+  PAYMENT_TERM:   ["PAYMENT TERM $", "PAYMENT TERM"],
+  LOAN:           ["LOAN"],
+  INTEREST:       ["INTEREST"],
+  OTHER_FEE:      ["OTHER FEE"],
+  INVOICE_AMOUNT: ["INVOICE AMOUNT"],
+  INVOICE_NO:     ["INVOICE NO", "INVOICE NUMBER", "INVOICE NO.", "INVOICE"],
+  INTAKE_DATE:    ["DATE", "INTAKE DATE"],
+};
 
-  const items       = [];
-  const skippedRows = [];
-  let   batchDate   = null;
+const METADATA_ALIASES = {
+  STAGE:            ["STAGE"],
+  CONTAINER_NUMBER: ["CONTAINER NUMBER", "CTR NUMBER", "CONTAINER NO", "CONTAINER NO."],
+  BL_NUMBER:        ["BL NUMBER", "B/L NUMBER", "BL NO", "BL NO.", "BL"],
+  SEAL_NUMBER:      ["SEAL NUMBER", "SEAL NO", "SEAL NO."],
+  VOLUME:           ["VOLUME"],
+  LOADING_DATE:     ["LOADING DATE"],
+  ETD:              ["ETD"],
+  ETA:              ["ETA"],
+  BATCH_REF:        ["BATCH REF", "PACKING LIST NUMBER", "PKL NUMBER"],
+  ARRIVAL_DATE:     ["ARRIVAL DATE", "ARRIVED DATE"],
+  PORT:             ["PORT", "PORT OF DISCHARGE"],
+  BATCH_DATE:       ["BATCH DATE"],
+  WAREHOUSE:        ["WAREHOUSE"],
+};
 
-  rows.forEach((row, rowIdx) => {
-    const [invoiceRaw, waybillRaw, phoneRaw, qtyRaw, dateRaw] = row;
-
-    if (!waybillRaw && !phoneRaw) {
-      skippedRows.push(rowIdx + 1);
-      return;
-    }
-
-    const waybills = splitWaybills(waybillRaw);
-    if (waybills.length === 0) {
-      skippedRows.push(rowIdx + 1);
-      return;
-    }
-
-    const phone     = normalisePhone(phoneRaw);
-    const qty       = parseQuantity(qtyRaw);
-    const invoiceNo = invoiceRaw ? String(invoiceRaw).trim() : null;
-    const date      = safeDate(dateRaw);
-    if (date && !batchDate) batchDate = date;
-
-    for (const waybill of waybills) {
-      items.push({
-        waybillNo:        waybill,
-        invoiceNo,
-        customerPhoneRaw: phoneRaw ? String(phoneRaw).trim() : null,
-        customerPhone:    phone,
-        quantity:         qty,
-        quantityRaw:      qtyRaw !== null ? String(qtyRaw).trim() : null,
-        intakeDate:       date,
-      });
-    }
-  });
-
-  return { items, skippedRows, batchDate };
+function normalizeHeaderCell(raw) {
+  if (!raw) return "";
+  return String(raw).trim().replace(/\s+/g, " ").toUpperCase();
 }
 
-// ─── Parser: Shipped sheet (CTR_INVOICE / Packing List format) ────────────────
-//
-// Structure:
-//   Row 1:  BL NUMBER        | <value or blank>
-//   Row 2:  CTR NUMBER       | MSBU7337022
-//   Row 3:  VOLUME           | 40 HQ
-//   Row 4:  SEAL NUMBER      | <value or blank>
-//   Row 5:  PACKING LIST NUMBER | 2026-001
-//   Row 6:  LOADING DATE     | 3/01/2026
-//   Row 7:  ETD              | <value or blank>
-//   Row 8:  ETA              | <value or blank>
-//   Row 9:  HEADER ROW       | JOB NUMBER, CNEE NAME, PHONE NUMBER, LOCATION, ...
-//   Row 10+: DATA ROWS
+// Module-level compiled lookups built once at startup.
+const COL_ALIAS_LOOKUP = (() => {
+  const m = new Map();
+  for (const [canonical, aliases] of Object.entries(COLUMN_ALIASES)) {
+    for (const alias of aliases) m.set(normalizeHeaderCell(alias), canonical);
+  }
+  return m;
+})();
 
-function parseShippedSheet(buffer) {
+const META_ALIAS_LOOKUP = (() => {
+  const m = new Map();
+  for (const [canonical, aliases] of Object.entries(METADATA_ALIASES)) {
+    for (const alias of aliases) m.set(normalizeHeaderCell(alias), canonical);
+  }
+  return m;
+})();
+
+const TRACKING_ALIASES_SET = new Set(
+  COLUMN_ALIASES.TRACKING_NO.map(normalizeHeaderCell)
+);
+
+// ─── Unified sheet parser ─────────────────────────────────────────────────────
+//
+// Single entry point for all three spreadsheet variants.
+// Returns { stage, metadata, items, skippedRows, headerWarnings, missingColumns }.
+
+function parseUnifiedSheet(buffer) {
   const wb   = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const ws   = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
-  // ── Extract metadata from rows 0–7 (0-indexed) ──────────────────────────
-  const meta = {};
-  for (let i = 0; i < 8 && i < rows.length; i++) {
-    const row = rows[i];
-    if (!row || !row[0]) continue;
-    const key = String(row[0]).trim().toUpperCase();
-    const val = row[1] !== null && row[1] !== undefined ? String(row[1]).trim() : null;
-    meta[key] = val;
+  if (!rows.length) {
+    return { stage: null, metadata: {}, items: [], skippedRows: [], headerWarnings: [], missingColumns: ["TRACKING_NO"] };
   }
 
-  const containerNumber    = meta["CTR NUMBER"]           || null; // e.g. "MSBU7337022"
-  const packingListNumber  = meta["PACKING LIST NUMBER"]  || null; // e.g. "2026-001"
-  const blNumber           = meta["BL NUMBER"]            || null;
-  const sealNumber         = meta["SEAL NUMBER"]          || null;
-  const volume             = meta["VOLUME"]               || null; // e.g. "40 HQ"
-  const loadingDateRaw     = meta["LOADING DATE"]         || null;
-  const etd                = meta["ETD"]                  || null;
-  const eta                = meta["ETA"]                  || null;
+  // ── 1. Metadata block: rows 0-9, label in col A, value in col B ──────────
+  const rawMeta = {};
+  for (let i = 0; i < Math.min(10, rows.length); i++) {
+    const row = rows[i];
+    if (!row || row[0] === null || row[0] === undefined) continue;
+    const label    = normalizeHeaderCell(String(row[0]));
+    const canonical = META_ALIAS_LOOKUP.get(label);
+    if (canonical && rawMeta[canonical] === undefined) {
+      rawMeta[canonical] = (row[1] !== null && row[1] !== undefined) ? row[1] : null;
+    }
+  }
 
-  const loadingDate = safeDate(loadingDateRaw);
+  // ── 2. Stage from STAGE metadata field ───────────────────────────────────
+  let stage = null;
+  if (rawMeta.STAGE !== null && rawMeta.STAGE !== undefined) {
+    const s = String(rawMeta.STAGE).trim().toUpperCase();
+    if      (s === "INTAKE")  stage = "intake";
+    else if (s === "LOADING") stage = "shipped";
+    else if (s === "SHIPPED") stage = "shipped";
+    else if (s === "ARRIVED") stage = "arrived";
+  }
 
-  // Use packing list number + container as the batch code
-  const batchCode = packingListNumber
-    ? `PKL-${packingListNumber}`
-    : containerNumber
-    ? `CTR-${containerNumber}`
-    : `SHIPPED-${new Date().toISOString().slice(0, 10)}`;
-
-  const containerRef = containerNumber || batchCode;
-
-  // ── Header is at row index 8 (row 9 in spreadsheet), data from index 9 ──
-  const HEADER_IDX = 8;
-  const headerRow  = rows[HEADER_IDX] || [];
-
-  const colIndex = {};
-  headerRow.forEach((h, i) => {
-    if (h) colIndex[String(h).trim().toUpperCase()] = i;
-  });
-
-  const get = (row, key) => {
-    const i = colIndex[key];
-    return i !== undefined ? row[i] : null;
-  };
-
-  const items       = [];
-  const skippedRows = [];
-
-  for (let i = HEADER_IDX + 1; i < rows.length; i++) {
+  // ── 3. Header row: first row with a TRACKING_NO alias in any cell ────────
+  let headerRowIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row) continue;
-
-    const jobNumberRaw = get(row, "JOB NUMBER");
-    const phoneRaw     = get(row, "PHONE NUMBER") ?? get(row, "CUSTOMER NO") ?? get(row, "CUST NO") ?? get(row, "CUSTOMER NUMBER");
-
-    // Skip empty or summary rows
-    if (!jobNumberRaw && !phoneRaw) {
-      skippedRows.push(i + 1);
-      continue;
+    for (const cell of row) {
+      if (cell !== null && cell !== undefined &&
+          TRACKING_ALIASES_SET.has(normalizeHeaderCell(String(cell)))) {
+        headerRowIdx = i;
+        break;
+      }
     }
+    if (headerRowIdx !== -1) break;
+  }
 
-    const waybills = splitWaybills(jobNumberRaw);
-    if (waybills.length === 0) {
-      skippedRows.push(i + 1);
-      continue;
-    }
+  // ── 4. Column index from header row ──────────────────────────────────────
+  const colIndex       = {};
+  const headerWarnings = [];
 
-    const phone         = normalisePhone(phoneRaw);
-    const cneeName      = get(row, "CNEE NAME")     ? String(get(row, "CNEE NAME")).trim()     : null;
-    const location      = get(row, "LOCATION")      ? String(get(row, "LOCATION")).trim().toUpperCase() : null;
-    const goodsType     = get(row, "GOODS TYPE")    ? String(get(row, "GOODS TYPE")).trim()    : null;
-    const description   = get(row, "DESCRIPTION")   ? String(get(row, "DESCRIPTION")).trim()   : null;
-    const remarks       = get(row, "REMARKS")        ? String(get(row, "REMARKS")).trim()       : null;
-    const qtyRaw        = get(row, "  QUANTITY") ?? get(row, "QUANTITY");
-    const qty           = parseQuantity(qtyRaw);
-    const cbmRaw        = get(row, "CBM");
-    const cbm           = cbmRaw !== null ? parseFloat(cbmRaw) : null;
+  if (headerRowIdx !== -1) {
+    const headerRow = rows[headerRowIdx] || [];
+    headerRow.forEach((cell, i) => {
+      if (cell === null || cell === undefined) return;
+      const normalized = normalizeHeaderCell(String(cell));
+      if (!normalized) return;
+      const canonical = COL_ALIAS_LOOKUP.get(normalized);
+      if (canonical) {
+        if (colIndex[canonical] === undefined) colIndex[canonical] = i;
+      } else {
+        headerWarnings.push(`Unrecognized column: "${String(cell).trim()}"`);
+      }
+    });
+  }
 
-    // Financial fields
-    const collectOF     = get(row, "COLLECT O/F AMOUNT") ? String(get(row, "COLLECT O/F AMOUNT")).trim() : null;
-    const paymentTerm   = parseQuantity(get(row, "PAYMENT TERM $"));
-    const loan          = parseQuantity(get(row, "LOAN"));
-    const interest      = parseQuantity(get(row, "INTEREST"));
-    const otherFee      = parseQuantity(get(row, "OTHER FEE"));
-    const invoiceAmount = parseQuantity(get(row, "INVOICE AMOUNT"));
-
-    // Skip totals row (CNEE NAME is purely numeric)
-    const cneeStr = cneeName ? String(cneeName) : "";
-    if (/^\d+(\.\d+)?$/.test(cneeStr)) {
-      skippedRows.push(i + 1);
-      continue;
-    }
-
-    for (const waybill of waybills) {
-      items.push({
-        waybillNo:          waybill,
-        customerPhoneRaw:   phoneRaw ? String(phoneRaw).trim() : null,
-        customerPhone:      phone,
-        customerName:       cneeName,
-        destinationCity:    location,
-        goodsType,
-        quantity:           qty,
-        quantityRaw:        qtyRaw !== null ? String(qtyRaw).trim() : null,
-        cbm:                isNaN(cbm) ? null : cbm,
-        productDescription: description || goodsType,
-        containerRef,
-        // Financial details from packing list
-        freightTerm:   collectOF,   // e.g. "COLLECT"
-        freightAmount: paymentTerm, // the dollar amount
-        loan,
-        interest,
-        otherFee,
-        invoiceAmount,
-        remarks,
-        // Batch metadata
-        receivingDate: loadingDate,
-      });
+  // ── 5. Stage fallback when STAGE field is absent (legacy files) ───────────
+  if (!stage) {
+    if (headerRowIdx === -1) {
+      // No header row → legacy positional intake
+      stage = "intake";
+    } else if (colIndex.CBM !== undefined || colIndex.COLLECT_OF !== undefined || colIndex.PAYMENT_TERM !== undefined) {
+      stage = "shipped";
+    } else if (rawMeta.ARRIVAL_DATE) {
+      stage = "arrived";
+    } else if (rawMeta.BATCH_DATE || rawMeta.WAREHOUSE) {
+      stage = "intake";
+    } else {
+      stage = "shipped";
     }
   }
 
-  return {
-    batchCode,
-    containerNumber,
-    packingListNumber,
-    blNumber,
-    sealNumber,
-    volume,
-    loadingDate,
-    etd,
-    eta,
-    items,
-    skippedRows,
-  };
-}
+  // ── 6. Missing required columns ───────────────────────────────────────────
+  // Flag TRACKING_NO missing when: (a) a header row was found but has no
+  // tracking column, or (b) no header row was found at all for a non-intake stage
+  // (which means the file can't be processed correctly).
+  const missingColumns = [];
+  if (headerRowIdx !== -1 && colIndex.TRACKING_NO === undefined) {
+    missingColumns.push("TRACKING_NO");
+  } else if (headerRowIdx === -1 && stage !== "intake") {
+    missingColumns.push("TRACKING_NO");
+  }
 
-// ─── Parser: Arrived sheet (Goods Arrived List — Ghana port) ─────────────────
-//
-// Supports two layouts:
-//
-// Layout A — same packing-list structure (most common):
-//   Row 1:  CONTAINER NUMBER  | MSBU7337022   (or CTR NUMBER)
-//   Row 2:  ARRIVAL DATE      | 15/04/2026
-//   Row 3:  BL NUMBER         | <optional>
-//   Row 4–8: any extra metadata rows
-//   Row 9:  HEADER ROW        | JOB NUMBER, CNEE NAME, CUSTOMER NO / PHONE NUMBER, …
-//   Row 10+: DATA ROWS
-//
-// Layout B — simple flat list (no metadata block):
-//   Row 1:  header            | JOB NUMBER  (detected when col-0 header contains "JOB")
-//   Row 2+: DATA ROWS         | waybillNo, customerPhone, arrivalDate, containerNo
+  // ── 7. Structured metadata object ─────────────────────────────────────────
+  const metadata = {};
+  const setMeta  = (key, fn) => { if (rawMeta[key] != null) metadata[key] = fn(rawMeta[key]); };
+  setMeta("CONTAINER_NUMBER", v => String(v).trim().toUpperCase());
+  setMeta("BL_NUMBER",        v => String(v).trim());
+  setMeta("SEAL_NUMBER",      v => String(v).trim());
+  setMeta("VOLUME",           v => String(v).trim());
+  setMeta("LOADING_DATE",     v => safeDate(v));
+  setMeta("ETD",              v => String(v).trim());
+  setMeta("ETA",              v => String(v).trim());
+  setMeta("BATCH_REF",        v => String(v).trim());
+  setMeta("ARRIVAL_DATE",     v => safeDate(v));
+  setMeta("PORT",             v => String(v).trim());
+  setMeta("BATCH_DATE",       v => safeDate(v));
+  setMeta("WAREHOUSE",        v => String(v).trim());
 
-function parseArrivedSheet(buffer) {
-  const wb   = XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const ws   = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  // ── 8. Parse data rows ────────────────────────────────────────────────────
+  const items       = [];
+  const skippedRows = [];
+  const containerRef = metadata.CONTAINER_NUMBER || metadata.BATCH_REF || null;
 
-  if (!rows.length) return { batchCode: null, containerNumber: null, arrivalDate: null, waybills: [], skippedRows: [] };
-
-  // ── Detect layout ────────────────────────────────────────────────────────────
-  const firstKey = rows[0] && rows[0][0] ? String(rows[0][0]).trim().toUpperCase() : "";
-  const isLayoutB = firstKey.includes("JOB") || firstKey.includes("WAYBILL");
-
-  let containerNumber = null;
-  let arrivalDate     = null;
-  let blNumber        = null;
-  let dataStartIdx    = 0;
-  let colIndex        = {};
-
-  if (isLayoutB) {
-    // Layout B: first row is the header
-    const headerRow = rows[0] || [];
-    headerRow.forEach((h, i) => { if (h) colIndex[String(h).trim().toUpperCase()] = i; });
-    dataStartIdx = 1;
+  if (headerRowIdx === -1) {
+    // Legacy positional intake: col 0=invoiceNo, 1=waybill, 2=phone, 3=qty, 4=date
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const [invoiceRaw, waybillRaw, phoneRaw, qtyRaw, dateRaw] = row;
+      if (!waybillRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
+      const waybills = splitWaybills(waybillRaw);
+      if (!waybills.length) { skippedRows.push(i + 1); continue; }
+      const phone = normalisePhone(phoneRaw);
+      const qty   = parseQuantity(qtyRaw);
+      const date  = safeDate(dateRaw);
+      if (date && !metadata.BATCH_DATE) metadata.BATCH_DATE = date;
+      for (const waybill of waybills) {
+        items.push({
+          waybillNo:        waybill,
+          invoiceNo:        invoiceRaw ? String(invoiceRaw).trim() : null,
+          customerPhoneRaw: phoneRaw ? String(phoneRaw).trim() : null,
+          customerPhone:    phone,
+          quantity:         qty,
+          quantityRaw:      qtyRaw !== null ? String(qtyRaw).trim() : null,
+          intakeDate:       date,
+        });
+      }
+    }
   } else {
-    // Layout A: scan rows 0-7 for metadata keys
-    const META_KEYS = {
-      "CONTAINER NUMBER": "container",
-      "CTR NUMBER":        "container",
-      "ARRIVAL DATE":      "arrival",
-      "ARRIVED DATE":      "arrival",
-      "BL NUMBER":         "bl",
+    const get = (row, key) => {
+      const idx = colIndex[key];
+      return idx !== undefined ? row[idx] : null;
     };
 
-    for (let i = 0; i < Math.min(8, rows.length); i++) {
+    for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[0]) continue;
-      const key = String(row[0]).trim().toUpperCase();
-      const val = row[1] !== null && row[1] !== undefined ? row[1] : null;
-      if (META_KEYS[key] === "container") containerNumber = val ? String(val).trim() : null;
-      if (META_KEYS[key] === "arrival")   arrivalDate     = safeDate(val);
-      if (META_KEYS[key] === "bl")        blNumber        = val ? String(val).trim() : null;
-    }
+      if (!row) continue;
 
-    // Row 9 (index 8) is the header
-    const HEADER_IDX = 8;
-    const headerRow  = rows[HEADER_IDX] || [];
-    headerRow.forEach((h, i) => { if (h) colIndex[String(h).trim().toUpperCase()] = i; });
-    dataStartIdx = HEADER_IDX + 1;
+      const trackingRaw = get(row, "TRACKING_NO");
+      const phoneRaw    = get(row, "CONTACT");
+
+      if (!trackingRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
+
+      const waybills = splitWaybills(trackingRaw);
+      if (!waybills.length) { skippedRows.push(i + 1); continue; }
+
+      const cneeRaw  = get(row, "CUSTOMER_NAME");
+      const cneeStr  = cneeRaw ? String(cneeRaw).trim() : "";
+      // Skip totals / summary rows where the name column is purely numeric
+      if (/^\d+(\.\d+)?$/.test(cneeStr)) { skippedRows.push(i + 1); continue; }
+
+      const phone      = normalisePhone(phoneRaw);
+      const location   = get(row, "LOCATION")   ? String(get(row, "LOCATION")).trim().toUpperCase() : null;
+      const descRaw    = get(row, "PRODUCT_DESC");
+      const goodsRaw   = get(row, "GOODS_TYPE");
+      const description = descRaw  ? String(descRaw).trim()  : null;
+      const goodsType   = goodsRaw ? String(goodsRaw).trim() : null;
+      const remarksRaw  = get(row, "REMARKS");
+      const remarks     = remarksRaw ? String(remarksRaw).trim() : null;
+      const qtyRaw      = get(row, "QTY");
+      const qty         = parseQuantity(qtyRaw);
+      const cbmRaw      = get(row, "CBM");
+      const cbm         = (cbmRaw !== null && cbmRaw !== undefined) ? parseFloat(cbmRaw) : null;
+      const invoiceRaw  = get(row, "INVOICE_NO");
+
+      // Financial fields from packing-list columns
+      const collectOF     = get(row, "COLLECT_OF");
+      const paymentTerm   = parseQuantity(get(row, "PAYMENT_TERM"));
+      const loan          = parseQuantity(get(row, "LOAN"));
+      const interest      = parseQuantity(get(row, "INTEREST"));
+      const otherFee      = parseQuantity(get(row, "OTHER_FEE"));
+      const invoiceAmount = parseQuantity(get(row, "INVOICE_AMOUNT"));
+
+      for (const waybill of waybills) {
+        const item = {
+          waybillNo:          waybill,
+          customerPhoneRaw:   phoneRaw ? String(phoneRaw).trim() : null,
+          customerPhone:      phone,
+          customerName:       cneeStr || null,
+          destinationCity:    location,
+          goodsType,
+          quantity:           qty,
+          quantityRaw:        qtyRaw !== null ? String(qtyRaw).trim() : null,
+          cbm:                (cbm !== null && !isNaN(cbm)) ? cbm : null,
+          productDescription: description || goodsType,
+          containerRef,
+          remarks,
+          freightTerm:    collectOF ? String(collectOF).trim() : null,
+          freightAmount:  paymentTerm,
+          loan,
+          interest,
+          otherFee,
+          invoiceAmount,
+          receivingDate:  metadata.LOADING_DATE || null,
+        };
+        if (stage === "intake") {
+          item.invoiceNo  = invoiceRaw ? String(invoiceRaw).trim() : null;
+          const dateCell  = get(row, "INTAKE_DATE");
+          item.intakeDate = safeDate(dateCell) || metadata.BATCH_DATE || null;
+        }
+        items.push(item);
+      }
+    }
   }
 
-  const get = (row, key) => {
-    const i = colIndex[key];
-    return i !== undefined ? row[i] : null;
-  };
+  return { stage, metadata, items, skippedRows, headerWarnings, missingColumns };
+}
 
-  const waybills    = [];
-  const skippedRows = [];
+// ─── Thin wrapper parsers (keep exported names, assert stage) ─────────────────
 
-  for (let i = dataStartIdx; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row) continue;
-
-    const jobRaw   = get(row, "JOB NUMBER") ?? get(row, "WAYBILL") ?? get(row, "WAYBILL NO") ?? row[0];
-    const phoneRaw = get(row, "PHONE NUMBER") ?? get(row, "CUSTOMER NO") ?? get(row, "CUST NO") ?? row[1];
-
-    if (!jobRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
-
-    const waybillList = splitWaybills(jobRaw);
-    if (!waybillList.length) { skippedRows.push(i + 1); continue; }
-
-    // Pick up arrival date per-row if not set at metadata level (Layout B)
-    if (!arrivalDate) {
-      const dateCand = get(row, "ARRIVAL DATE") ?? get(row, "DATE") ?? row[2];
-      arrivalDate = safeDate(dateCand);
-    }
-
-    // Pick up container number per-row if not set (Layout B)
-    if (!containerNumber) {
-      const ctrCand = get(row, "CONTAINER") ?? get(row, "CTR") ?? get(row, "CONTAINER NUMBER") ?? row[3];
-      if (ctrCand) containerNumber = String(ctrCand).trim().toUpperCase();
-    }
-
-    for (const waybill of waybillList) {
-      waybills.push(waybill);
-    }
+function parseIntakeSheet(buffer) {
+  const result = parseUnifiedSheet(buffer);
+  if (result.stage && result.stage !== "intake") {
+    throw new Error(
+      `Spreadsheet STAGE is "${result.stage.toUpperCase()}" but was uploaded to the intake endpoint.`
+    );
   }
+  return result;
+}
 
-  const batchCode = containerNumber
-    ? `ARR-${containerNumber}`
-    : arrivalDate
-    ? `ARR-${(arrivalDate instanceof Date ? arrivalDate : new Date()).toISOString().slice(0, 10)}`
-    : `ARR-${new Date().toISOString().slice(0, 10)}`;
+function parseShippedSheet(buffer) {
+  const result = parseUnifiedSheet(buffer);
+  if (result.stage && result.stage !== "shipped") {
+    throw new Error(
+      `Spreadsheet STAGE is "${result.stage.toUpperCase()}" but was uploaded to the shipped/loading endpoint.`
+    );
+  }
+  return result;
+}
 
-  return { batchCode, containerNumber, arrivalDate, blNumber, waybills, skippedRows };
+function parseArrivedSheet(buffer) {
+  const result = parseUnifiedSheet(buffer);
+  if (result.stage && result.stage !== "arrived") {
+    throw new Error(
+      `Spreadsheet STAGE is "${result.stage.toUpperCase()}" but was uploaded to the arrived endpoint.`
+    );
+  }
+  return result;
 }
 
 // ─── Processor: Arrived batch ─────────────────────────────────────────────────
 
 async function processArrivedBatch(parsedData, uploadedBy) {
-  const { batchCode, containerNumber, arrivalDate, blNumber, waybills, skippedRows } = parsedData;
+  const { metadata, items, skippedRows } = parsedData;
+  const { containerNumber, arrivalDate, blNumber } = metadata;
+
+  const batchCode = containerNumber
+    ? `ARR-${containerNumber}`
+    : arrivalDate
+    ? `ARR-${arrivalDate.toISOString().slice(0, 10)}`
+    : `ARR-${new Date().toISOString().slice(0, 10)}`;
 
   const existing = await Batch.findOne({ batchCode, stage: "arrived" });
   if (existing) throw new DuplicateBatchError(batchCode, existing);
 
   const batch = await Batch.create({
     batchCode,
-    stage: "arrived",
+    stage:      "arrived",
     uploadedBy,
     skippedRows,
     containerRefs: containerNumber
       ? [{ code: batchCode, id: containerNumber, date: arrivalDate }]
       : [],
     notes: [
-      blNumber    ? `BL: ${blNumber}`                             : null,
+      blNumber    ? `BL: ${blNumber}`                                    : null,
       arrivalDate ? `Arrived: ${arrivalDate.toISOString().slice(0, 10)}` : null,
     ].filter(Boolean).join(" | ") || undefined,
   });
@@ -409,48 +410,27 @@ async function processArrivedBatch(parsedData, uploadedBy) {
   let matchedItems = 0;
   let newItems     = 0;
 
-  // ── Strategy 1: update by explicit waybill list ────────────────────────────
-  if (waybills.length > 0) {
-    for (const waybill of waybills) {
-      const item = await ShipmentItem.findOne({ waybillNo: waybill });
-      if (!item) { newItems++; continue; } // count as "not matched" (no auto-create)
+  // Match solely by TRACKING_NO from items[] — no container-based fallback
+  // (fallback was removed because it fires when sheets are misaligned and
+  // marks unrelated items as arrived).
+  for (const item of items) {
+    const found = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
+    if (!found) { newItems++; continue; }
 
-      item.status       = "customs";
-      item.arrivedBatch = batch._id;
-      if (arrivalDate) item.arrivalDate = arrivalDate;
-      item.stageHistory.push({
-        stage:     "arrived",
-        status:    "customs",
-        batchId:   batch._id,
-        updatedAt: new Date(),
-        note:      `Arrived at Ghana port via ${batchCode}`,
-      });
-      await item.save();
-      matchedItems++;
-    }
+    found.status       = "customs";
+    found.arrivedBatch = batch._id;
+    if (arrivalDate) found.arrivalDate = arrivalDate;
+    found.stageHistory.push({
+      stage:     "arrived",
+      status:    "customs",
+      batchId:   batch._id,
+      updatedAt: new Date(),
+      note:      `Arrived at Ghana port via ${batchCode}`,
+    });
+    await found.save();
+    matchedItems++;
   }
 
-  // ── Strategy 2: fall back to updating all "shipped" items in this container ─
-  if (matchedItems === 0 && containerNumber) {
-    const result = await ShipmentItem.updateMany(
-      { containerRef: containerNumber.toUpperCase(), status: "shipped" },
-      {
-        $set:  { status: "customs", arrivedBatch: batch._id, ...(arrivalDate ? { arrivalDate } : {}) },
-        $push: {
-          stageHistory: {
-            stage:     "arrived",
-            status:    "customs",
-            batchId:   batch._id,
-            updatedAt: new Date(),
-            note:      `Arrived at Ghana port — container ${containerNumber}`,
-          },
-        },
-      }
-    );
-    matchedItems = result.modifiedCount;
-  }
-
-  // ── Update ContainerLoading record ─────────────────────────────────────────
   if (containerNumber) {
     await ContainerLoading.findOneAndUpdate(
       { containerNumber: containerNumber.toUpperCase() },
@@ -468,9 +448,9 @@ async function processArrivedBatch(parsedData, uploadedBy) {
   await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems: 0, matchedItems, heldItems: 0 });
 
   return {
-    batch: await Batch.findById(batch._id),
+    batch:      await Batch.findById(batch._id),
     skippedRows,
-    summary: `${totalItems} items marked as arrived (customs). Container: ${containerNumber || "N/A"}.`,
+    summary:    `${totalItems} items marked as arrived (customs). Container: ${containerNumber || "N/A"}.`,
   };
 }
 
@@ -488,7 +468,8 @@ class DuplicateBatchError extends Error {
 // ─── Processor: Intake batch ──────────────────────────────────────────────────
 
 async function processIntakeBatch(parsedData, uploadedBy, filename) {
-  const { items, skippedRows, batchDate } = parsedData;
+  const { metadata, items, skippedRows } = parsedData;
+  const batchDate = metadata.BATCH_DATE || null;
 
   const batchCode = intakeBatchCode(batchDate, filename);
   const existing  = await Batch.findOne({ batchCode, stage: "intake" });
@@ -506,10 +487,7 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
 
   for (const item of items) {
     const exists = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
-    if (exists) {
-      matchedItems++;
-      continue;
-    }
+    if (exists) { matchedItems++; continue; }
 
     const customerId = await findUserByPhone(item.customerPhone);
     await ShipmentItem.create({
@@ -532,20 +510,32 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
   await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems, matchedItems, heldItems: 0 });
 
   return {
-    batch: await Batch.findById(batch._id),
+    batch:      await Batch.findById(batch._id),
     skippedRows,
-    summary: `${totalItems} items processed. ${newItems} new, ${matchedItems} already existed, 0 held.`,
+    summary:    `${totalItems} items processed. ${newItems} new, ${matchedItems} already existed, 0 held.`,
   };
 }
 
-// ─── Processor: Shipped batch (CTR_INVOICE packing list) ─────────────────────
+// ─── Processor: Shipped batch (packing list / loading list) ───────────────────
 
 async function processShippedBatch(parsedData, uploadedBy) {
+  const { metadata, items, skippedRows } = parsedData;
   const {
-    batchCode, containerNumber, packingListNumber,
-    blNumber, sealNumber, volume, loadingDate, etd, eta,
-    items, skippedRows,
-  } = parsedData;
+    CONTAINER_NUMBER: containerNumber,
+    BL_NUMBER:        blNumber,
+    SEAL_NUMBER:      sealNumber,
+    VOLUME:           volume,
+    LOADING_DATE:     loadingDate,
+    ETD:              etd,
+    ETA:              eta,
+    BATCH_REF:        batchRef,
+  } = metadata;
+
+  const batchCode = batchRef
+    ? `PKL-${batchRef}`
+    : containerNumber
+    ? `CTR-${containerNumber}`
+    : `SHIPPED-${new Date().toISOString().slice(0, 10)}`;
 
   const existing = await Batch.findOne({ batchCode, stage: "shipped" });
   if (existing) throw new DuplicateBatchError(batchCode, existing);
@@ -555,16 +545,15 @@ async function processShippedBatch(parsedData, uploadedBy) {
     stage:      "shipped",
     uploadedBy,
     skippedRows,
-    // Store container metadata on the batch for reference
     containerRefs: containerNumber
-      ? [{ code: packingListNumber || batchCode, id: containerNumber, date: loadingDate }]
+      ? [{ code: batchRef || batchCode, id: containerNumber, date: loadingDate }]
       : [],
     notes: [
-      blNumber     ? `BL: ${blNumber}`                   : null,
-      sealNumber   ? `Seal: ${sealNumber}`                : null,
-      volume       ? `Volume: ${volume}`                  : null,
-      etd          ? `ETD: ${etd}`                        : null,
-      eta          ? `ETA: ${eta}`                        : null,
+      blNumber   ? `BL: ${blNumber}`     : null,
+      sealNumber ? `Seal: ${sealNumber}` : null,
+      volume     ? `Volume: ${volume}`   : null,
+      etd        ? `ETD: ${etd}`         : null,
+      eta        ? `ETA: ${eta}`         : null,
     ].filter(Boolean).join(" | ") || undefined,
   });
 
@@ -574,44 +563,40 @@ async function processShippedBatch(parsedData, uploadedBy) {
 
   for (const item of items) {
     const customerId = await findUserByPhone(item.customerPhone);
-    const existing   = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
+    const found      = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
 
-    if (existing) {
-      if (existing.status === "shipped") {
-        matchedItems++;
-        continue;
-      }
-      // Update to shipped — merge all new fields
-      existing.status           = "shipped";
-      existing.shippedBatch     = batch._id;
-      existing.customerName     = item.customerName     || existing.customerName;
-      existing.destinationCity  = item.destinationCity  || existing.destinationCity;
-      existing.cbm              = item.cbm              ?? existing.cbm;
-      existing.productDescription = item.productDescription || existing.productDescription;
-      existing.containerRef     = item.containerRef     || existing.containerRef;
-      existing.quantity         = item.quantity         ?? existing.quantity;
-      existing.quantityRaw      = item.quantityRaw      || existing.quantityRaw;
-      existing.receivingDate    = item.receivingDate     || existing.receivingDate;
-      // Financial fields from packing list
-      existing.freightTerm      = item.freightTerm      || existing.freightTerm;
-      existing.freightAmount    = item.freightAmount     ?? existing.freightAmount;
-      existing.loan             = item.loan              ?? existing.loan;
-      existing.interest         = item.interest          ?? existing.interest;
-      existing.otherFee         = item.otherFee          ?? existing.otherFee;
-      existing.invoiceAmount    = item.invoiceAmount      ?? existing.invoiceAmount;
-      existing.remarks          = item.remarks           || existing.remarks;
-      if (customerId && !existing.customerId) existing.customerId = customerId;
-      existing.stageHistory.push({
+    if (found) {
+      if (found.status === "shipped") { matchedItems++; continue; }
+
+      found.status              = "shipped";
+      found.shippedBatch        = batch._id;
+      found.customerName        = item.customerName        || found.customerName;
+      found.destinationCity     = item.destinationCity     || found.destinationCity;
+      found.cbm                 = item.cbm                 ?? found.cbm;
+      found.productDescription  = item.productDescription  || found.productDescription;
+      found.goodsType           = item.goodsType           || found.goodsType;
+      found.containerRef        = item.containerRef        || found.containerRef;
+      found.quantity            = item.quantity            ?? found.quantity;
+      found.quantityRaw         = item.quantityRaw         || found.quantityRaw;
+      found.receivingDate       = item.receivingDate       || found.receivingDate;
+      found.freightTerm         = item.freightTerm         || found.freightTerm;
+      found.freightAmount       = item.freightAmount       ?? found.freightAmount;
+      found.loan                = item.loan                ?? found.loan;
+      found.interest            = item.interest            ?? found.interest;
+      found.otherFee            = item.otherFee            ?? found.otherFee;
+      found.invoiceAmount       = item.invoiceAmount       ?? found.invoiceAmount;
+      found.remarks             = item.remarks             || found.remarks;
+      if (customerId && !found.customerId) found.customerId = customerId;
+      found.stageHistory.push({
         stage:     "shipped",
         status:    "shipped",
         batchId:   batch._id,
         updatedAt: new Date(),
         note:      `Updated via packing list ${batchCode}`,
       });
-      await existing.save();
+      await found.save();
       matchedItems++;
     } else {
-      // Item not in any intake — create directly as shipped
       await ShipmentItem.create({
         ...item,
         customerId,
@@ -629,10 +614,10 @@ async function processShippedBatch(parsedData, uploadedBy) {
     }
   }
 
-  // Hold items still in_warehouse from recent intake batches not included here
-  const cutoff          = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-  const recentBatches   = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
-  const recentBatchIds  = recentBatches.map((b) => b._id);
+  // Auto-hold items still in_warehouse from recent intake batches not in this list
+  const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
+  const recentBatchIds = recentBatches.map((b) => b._id);
 
   const heldResult = await ShipmentItem.updateMany(
     {
@@ -658,20 +643,17 @@ async function processShippedBatch(parsedData, uploadedBy) {
   const totalItems = newItems + matchedItems;
   await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems, matchedItems, heldItems });
 
-  // ── Auto-create or update the ContainerLoading record ─────────────────────
   if (containerNumber) {
     const containerData = {
-      vesselName:  undefined,
-      blNumber:    blNumber   || undefined,
-      sealNumber:  sealNumber || undefined,
-      volume:      volume     || undefined,
+      blNumber:    blNumber    || undefined,
+      sealNumber:  sealNumber  || undefined,
+      volume:      volume      || undefined,
       loadingDate: loadingDate || undefined,
       etd:         safeDate(etd) || undefined,
       eta:         safeDate(eta) || undefined,
       batchRef:    batch._id,
       updatedBy:   uploadedBy,
     };
-    // Strip undefined so $set only touches fields that arrived in this upload
     Object.keys(containerData).forEach((k) => containerData[k] === undefined && delete containerData[k]);
 
     await ContainerLoading.findOneAndUpdate(
@@ -680,48 +662,97 @@ async function processShippedBatch(parsedData, uploadedBy) {
         $set:         containerData,
         $setOnInsert: { status: "shipped", createdBy: uploadedBy },
       },
-      { upsert: true, new: true },
+      { upsert: true, new: true }
     );
   }
 
   return {
-    batch: await Batch.findById(batch._id),
+    batch:      await Batch.findById(batch._id),
     skippedRows,
-    summary: `${totalItems} items processed. ${newItems} new, ${matchedItems} updated, ${heldItems} held.`,
+    summary:    `${totalItems} items processed. ${newItems} new, ${matchedItems} updated, ${heldItems} held.`,
   };
 }
 
-/**
- * Look up shipment items by phone number.
- */
-async function lookupByPhone(normalised) {
-  const items = await ShipmentItem.find({ customerPhone: normalised })
-    .sort({ updatedAt: -1 })
-    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
-    .populate("intakeBatch", "batchCode stage createdAt")
-    .populate("shippedBatch", "batchCode stage createdAt");
-  return items;
+// ─── Validate (no DB writes) ──────────────────────────────────────────────────
+//
+// Returns a preview of what a real upload would do, suitable for the
+// "Preview" button in BulkUploadModal. Never persists anything.
+
+async function validateBatch(buffer) {
+  const parsed = parseUnifiedSheet(buffer);
+  const { stage, metadata, items, skippedRows, headerWarnings, missingColumns } = parsed;
+
+  const waybills = [...new Set(items.map((i) => i.waybillNo).filter(Boolean))];
+
+  const existingItems = await ShipmentItem.find({ waybillNo: { $in: waybills } })
+    .select("waybillNo status")
+    .lean();
+  const existingSet = new Set(existingItems.map((i) => i.waybillNo));
+
+  const willCreate = waybills.filter((w) => !existingSet.has(w)).length;
+  const willUpdate = waybills.filter((w) => existingSet.has(w)).length;
+
+  let willHold = 0;
+  if (stage === "shipped") {
+    const cutoff        = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const recentBatches = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id").lean();
+    willHold = await ShipmentItem.countDocuments({
+      status:      "in_warehouse",
+      intakeBatch: { $in: recentBatches.map((b) => b._id) },
+      waybillNo:   { $nin: waybills },
+    });
+  }
+
+  const sampleRows = items.slice(0, 5).map((item) => ({
+    waybillNo:    item.waybillNo,
+    customerName: item.customerName,
+    customerPhone: item.customerPhoneRaw,
+    cbm:          item.cbm,
+    qty:          item.quantity,
+    destination:  item.destinationCity,
+  }));
+
+  return {
+    stage,
+    metadata,
+    headerWarnings,
+    missingRequired: missingColumns,
+    sampleRows,
+    willCreate,
+    willUpdate,
+    willHold,
+    totalRows:   items.length,
+    skippedRows: skippedRows.length,
+  };
 }
 
-/**
- * Look up a shipment item by waybill number.
- */
-async function lookupByWaybill(waybill) {
-  const item = await ShipmentItem.findOne({ waybillNo: waybill })
+// ─── Lookup helpers ───────────────────────────────────────────────────────────
+
+async function lookupByPhone(normalised) {
+  return ShipmentItem.find({ customerPhone: normalised })
+    .sort({ updatedAt: -1 })
     .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
-    .populate("intakeBatch", "batchCode stage createdAt")
+    .populate("intakeBatch",  "batchCode stage createdAt")
     .populate("shippedBatch", "batchCode stage createdAt");
-  return item;
+}
+
+async function lookupByWaybill(waybill) {
+  return ShipmentItem.findOne({ waybillNo: waybill })
+    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
+    .populate("intakeBatch",  "batchCode stage createdAt")
+    .populate("shippedBatch", "batchCode stage createdAt");
 }
 
 module.exports = {
   DuplicateBatchError,
+  parseUnifiedSheet,
   parseIntakeSheet,
   parseShippedSheet,
   parseArrivedSheet,
   processIntakeBatch,
   processShippedBatch,
   processArrivedBatch,
+  validateBatch,
   normalisePhone,
   lookupByPhone,
   lookupByWaybill,

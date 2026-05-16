@@ -10,6 +10,7 @@ const {
   processIntakeBatch,
   processShippedBatch,
   processArrivedBatch,
+  validateBatch,
   normalisePhone,
 } = require("../services/batch.service");
 const { respond } = require("../utils/response");
@@ -374,6 +375,18 @@ async function reassignHeldItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// ─── Validate (preview without DB writes) ────────────────────────────────────
+
+async function validateUpload(req, res, next) {
+  if (!validateFile(req, res)) return;
+  try {
+    const result = await validateBatch(req.file.buffer);
+    return respond(res, 200, true, "File parsed successfully", result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ─── Update item (staff correction) ──────────────────────────────────────────
 
 async function updateItem(req, res, next) {
@@ -446,6 +459,7 @@ module.exports = {
   uploadIntake,
   uploadShipped,
   uploadArrived,
+  validateUpload,
   listBatches,
   getBatch,
   getBatchItems,

@@ -82,6 +82,50 @@ const customerOnly = [authenticate, authorize("customer")];
  *       400: { description: No file or wrong type }
  *       401: { description: Unauthorized }
  */
+/**
+ * @swagger
+ * /batches/validate:
+ *   post:
+ *     tags: [Batches]
+ *     summary: Preview an upload without writing to the database
+ *     description: >
+ *       Parses the spreadsheet and returns stage detection, metadata, header
+ *       warnings, missing required columns, 5 sample rows, and counts of
+ *       items that would be created, updated, or held. No data is persisted.
+ *       Use this to power a "Preview" step before the final upload.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Parse preview
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 stage:           { type: string, enum: [intake, shipped, arrived] }
+ *                 headerWarnings:  { type: array, items: { type: string } }
+ *                 missingRequired: { type: array, items: { type: string } }
+ *                 sampleRows:      { type: array }
+ *                 willCreate:      { type: integer }
+ *                 willUpdate:      { type: integer }
+ *                 willHold:        { type: integer }
+ *       400: { description: No file or wrong type }
+ *       401: { description: Unauthorized }
+ */
+router.post("/batches/validate", ...staffOnly, upload.single("file"), ctrl.validateUpload);
+
 router.post("/batches/intake",  ...staffOnly, upload.single("file"), ctrl.uploadIntake);
 
 /**
