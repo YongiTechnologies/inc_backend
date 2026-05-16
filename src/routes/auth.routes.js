@@ -410,4 +410,10 @@ router.post("/logout", ctrl.logout);
  */
 router.get("/me", authenticate, ctrl.me);
 
+// ─── Phone-based auth ─────────────────────────────────────────────────────────
+router.post("/phone-check",        ctrl.phoneCheck);
+router.post("/phone-login",        ctrl.phoneLogin);
+router.post("/phone-set-password", ctrl.phoneSetPassword);
+router.post("/phone-signup",       ctrl.phoneSignup);
+
 module.exports = router;
