@@ -278,6 +278,15 @@ async function getMyBatchItems(req, res, next) {
       ShipmentItem.countDocuments(filter),
     ]);
 
+    // Lazy backfill: link items found by phone so future queries hit the customerId index
+    const toBackfill = items.filter((i) => !i.customerId);
+    if (toBackfill.length > 0) {
+      ShipmentItem.updateMany(
+        { _id: { $in: toBackfill.map((i) => i._id) }, customerId: null },
+        { $set: { customerId: user._id } }
+      ).catch(() => {});
+    }
+
     const grouped = { in_warehouse: [], shipped: [], held: [] };
     items.forEach((item) => {
       if (grouped[item.status]) grouped[item.status].push(item);

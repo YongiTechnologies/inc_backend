@@ -416,4 +416,7 @@ router.post("/phone-login",        ctrl.phoneLogin);
 router.post("/phone-set-password", ctrl.phoneSetPassword);
 router.post("/phone-signup",       ctrl.phoneSignup);
 
+// ─── Profile update ───────────────────────────────────────────────────────────
+router.patch("/me/phone", authenticate, ctrl.updateMyPhone);
+
 module.exports = router;

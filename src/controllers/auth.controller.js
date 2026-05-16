@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const User = require("../models/User");
 const RefreshToken = require("../models/RefreshToken");
+const ShipmentItem = require("../models/ShipmentItem");
 const emailService = require("../services/email.service");
 const { signAccess, signRefresh, verifyRefresh } = require("../utils/jwt");
 const { respond } = require("../utils/response");
@@ -294,4 +295,37 @@ async function phoneSignup(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { register, login, forgotPassword, resetPassword, refresh, logout, me, phoneCheck, phoneLogin, phoneSetPassword, phoneSignup };
+// PATCH /api/auth/me/phone
+// Lets a logged-in customer link/update their phone number.
+// After saving, backfills customerId on batch items that match by phone so
+// shipments immediately appear on their dashboard.
+async function updateMyPhone(req, res, next) {
+  try {
+    const { phone } = req.body;
+    if (!phone) return respond(res, 400, false, "Phone is required");
+    const normalised = normalisePhone(phone);
+    if (!normalised) return respond(res, 400, false, "Invalid phone number");
+
+    const last9 = normalised.slice(-9);
+
+    // Make sure no other user owns this number
+    const taken = await User.findOne({
+      phone: { $regex: last9 + "$" },
+      _id: { $ne: req.user._id },
+    });
+    if (taken) return respond(res, 409, false, "This phone number is already linked to another account");
+
+    req.user.phone = normalised;
+    await req.user.save();
+
+    // Backfill: link batch items that match by phone but have no customerId
+    await ShipmentItem.updateMany(
+      { customerPhone: { $regex: last9 + "$" }, customerId: null },
+      { $set: { customerId: req.user._id } }
+    ).catch(() => {});
+
+    return respond(res, 200, true, "Phone linked successfully", { phone: normalised });
+  } catch (err) { next(err); }
+}
+
+module.exports = { register, login, forgotPassword, resetPassword, refresh, logout, me, phoneCheck, phoneLogin, phoneSetPassword, phoneSignup, updateMyPhone };
