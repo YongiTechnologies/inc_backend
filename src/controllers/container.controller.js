@@ -69,7 +69,7 @@ async function searchContainerLoadings(req, res, next) {
     let waybillMatch = null;
     if (containers.length === 0 || !q.match(/^[A-Z]{4}\d/)) {
       const item = await ShipmentItem.findOne({ waybillNo: q })
-        .select("waybillNo containerRef status customerName destinationCity -_id")
+        .select("waybillNo containerRef status customerName destinationCity cbm productDescription quantity -_id")
         .lean();
 
       if (item?.containerRef) {

@@ -313,6 +313,7 @@ function buildItemResponse(item, options = {}) {
       productDescription: item.productDescription,
       packageType:       item.packageType,
       weight:            item.weight,
+      cbm:               item.cbm,
       quantity:          item.quantity,
       isFragile:         item.isFragile,
       requiresCustoms:   item.requiresCustoms,
