@@ -7,14 +7,16 @@ const Joi = require("joi");
 
 async function listUsers(req, res, next) {
   try {
-    const { page = 1, limit = 20, role, search } = req.query;
+    const { page = 1, limit = 20, role, search, q } = req.query;
     const filter = {};
     if (role) filter.role = role;
-    if (search) {
-      const escaped = escapeRegex(search);
+    const term = search || q;
+    if (term) {
+      const escaped = escapeRegex(term);
       filter.$or = [
         { name:  new RegExp(escaped, "i") },
         { email: new RegExp(escaped, "i") },
+        { phone: new RegExp(escaped, "i") },
       ];
     }
 

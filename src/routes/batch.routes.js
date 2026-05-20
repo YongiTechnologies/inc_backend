@@ -211,7 +211,7 @@ router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploa
  *     parameters:
  *       - in: query
  *         name: stage
- *         schema: { type: string, enum: [intake, shipped] }
+ *         schema: { type: string, enum: [intake, shipped, arrived] }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }

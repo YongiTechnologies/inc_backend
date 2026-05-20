@@ -111,7 +111,7 @@ async function uploadArrived(req, res, next) {
     return respond(res, 201, true, "Arrived batch processed successfully", result);
   } catch (err) {
     if (err instanceof DuplicateBatchError) {
-      return respond(res, 409, false, `This arrived list has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
+      return respond(res, 409, false, `This arrival file has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
         batchCode:  err.batchCode,
         uploadedAt: err.uploadedAt,
       });
@@ -229,9 +229,10 @@ async function listAllItems(req, res, next) {
         .sort({ updatedAt: -1 })
         .skip((parseInt(page) - 1) * parseInt(limit))
         .limit(Math.min(parseInt(limit), 100))
-        .populate("customerId",  "name email phone")
+        .populate("customerId",   "name email phone")
         .populate("intakeBatch",  "batchCode stage createdAt")
-        .populate("shippedBatch", "batchCode stage createdAt"),
+        .populate("shippedBatch", "batchCode stage createdAt")
+        .populate("arrivedBatch", "batchCode stage createdAt"),
       ShipmentItem.countDocuments(filter),
     ]);
 
@@ -274,7 +275,8 @@ async function getMyBatchItems(req, res, next) {
         .limit(Math.min(parseInt(limit), 50))
         .select(PUBLIC_ITEM_SELECT)
         .populate("intakeBatch",  "batchCode stage createdAt")
-        .populate("shippedBatch", "batchCode stage createdAt"),
+        .populate("shippedBatch", "batchCode stage createdAt")
+        .populate("arrivedBatch", "batchCode stage createdAt"),
       ShipmentItem.countDocuments(filter),
     ]);
 
@@ -287,7 +289,7 @@ async function getMyBatchItems(req, res, next) {
       ).catch(() => {});
     }
 
-    const grouped = { in_warehouse: [], shipped: [], held: [] };
+    const grouped = { in_warehouse: [], shipped: [], customs: [], out_for_delivery: [], delivered: [], held: [] };
     items.forEach((item) => {
       if (grouped[item.status]) grouped[item.status].push(item);
     });
