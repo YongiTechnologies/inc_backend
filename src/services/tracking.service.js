@@ -295,8 +295,11 @@ function buildItemResponse(item, options = {}) {
   // omitted from this response. This function is the source for the public
   // /api/tracking/:trackingNumber endpoint — containerRef is staff-only.
   const response = {
-    waybillNo:        item.waybillNo,
-    invoiceNo:        item.invoiceNo,
+    waybillNo:           item.waybillNo,
+    invoiceNo:           item.invoiceNo,
+    customerName:        item.customerName || null,
+    customerPhone:       item.customerPhone || null,
+    customerPhoneRaw:    item.customerPhoneRaw || null,
     status: {
       code:      item.status,
       label:     STATUS_LABELS[item.status],
