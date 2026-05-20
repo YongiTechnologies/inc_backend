@@ -501,7 +501,16 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
 
   for (const item of items) {
     const exists = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
-    if (exists) { matchedItems++; continue; }
+    if (exists) {
+      // Patch missing fields that may have been blank on the original upload
+      // (e.g. invoiceNo when the column alias was not yet recognised).
+      const patch = {};
+      if (!exists.invoiceNo    && item.invoiceNo)    patch.invoiceNo    = item.invoiceNo;
+      if (!exists.customerName && item.customerName) patch.customerName = item.customerName;
+      if (Object.keys(patch).length) await ShipmentItem.updateOne({ _id: exists._id }, { $set: patch });
+      matchedItems++;
+      continue;
+    }
 
     const customerId = await findUserByPhone(item.customerPhone);
     await ShipmentItem.create({
