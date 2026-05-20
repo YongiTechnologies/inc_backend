@@ -77,7 +77,7 @@ const COLUMN_ALIASES = {
   INTEREST:       ["INTEREST"],
   OTHER_FEE:      ["OTHER FEE"],
   INVOICE_AMOUNT: ["INVOICE AMOUNT"],
-  INVOICE_NO:     ["INVOICE NO", "INVOICE NUMBER", "INVOICE NO.", "INVOICE"],
+  INVOICE_NO:     ["INVOICE NO", "INVOICE N0", "INVOICE NUMBER", "INVOICE NO.", "INVOICE N0.", "INVOICE"],
   INTAKE_DATE:    ["DATE", "INTAKE DATE"],
   RECEIVING_DATE: ["RECEIVING DATE", "RECEIVE DATE", "RECEIPT DATE", "EXPECTED DELIVERY", "EXPECTED DELIVERY DATE", "DELIVERY DATE", "ARRIVAL DATE PER ITEM"],
 };
@@ -273,6 +273,8 @@ function parseUnifiedSheet(buffer) {
       return idx !== undefined ? row[idx] : null;
     };
 
+    const lastNameByPhone = {}; // carry forward name across rows sharing the same phone
+
     for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const row = rows[i];
       if (!row) continue;
@@ -286,11 +288,19 @@ function parseUnifiedSheet(buffer) {
       if (!waybills.length) { skippedRows.push(i + 1); continue; }
 
       const cneeRaw  = get(row, "CUSTOMER_NAME");
-      const cneeStr  = cneeRaw ? String(cneeRaw).trim() : "";
+      let   cneeStr  = cneeRaw ? String(cneeRaw).trim() : "";
       // Skip totals / summary rows where the name column is purely numeric
       if (/^\d+(\.\d+)?$/.test(cneeStr)) { skippedRows.push(i + 1); continue; }
 
-      const phone      = normalisePhone(phoneRaw);
+      // When the name cell is blank but a prior row for the same phone had a name,
+      // carry that name forward (matches how staff fill in Excel sheets).
+      const phone = normalisePhone(phoneRaw);
+      if (!cneeStr && phone && lastNameByPhone[phone]) {
+        cneeStr = lastNameByPhone[phone];
+      } else if (cneeStr && phone) {
+        lastNameByPhone[phone] = cneeStr;
+      }
+
       const location   = get(row, "LOCATION")   ? String(get(row, "LOCATION")).trim().toUpperCase() : null;
       const descRaw    = get(row, "PRODUCT_DESC");
       const goodsRaw   = get(row, "GOODS_TYPE");
