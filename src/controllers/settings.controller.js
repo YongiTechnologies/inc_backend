@@ -7,6 +7,7 @@ exports.getSettings = async (req, res) => {
         respond(res, 200, true, "Settings retrieved", {
             cbmRate: settings.cbmRate,
             usdToGhsRate: settings.usdToGhsRate,
+            minFeeUsd: settings.minFeeUsd,
         });
     } catch (err) {
         respond(res, 500, false, "Failed to retrieve settings");
@@ -15,7 +16,7 @@ exports.getSettings = async (req, res) => {
 
 exports.updateSettings = async (req, res) => {
     try {
-        const { cbmRate, usdToGhsRate } = req.body;
+        const { cbmRate, usdToGhsRate, minFeeUsd } = req.body;
         const update = {};
 
         if (cbmRate !== undefined) {
@@ -28,6 +29,11 @@ exports.updateSettings = async (req, res) => {
                 return respond(res, 400, false, "usdToGhsRate must be a positive number");
             update.usdToGhsRate = usdToGhsRate;
         }
+        if (minFeeUsd !== undefined) {
+            if (typeof minFeeUsd !== "number" || minFeeUsd < 0)
+                return respond(res, 400, false, "minFeeUsd must be a non-negative number");
+            update.minFeeUsd = minFeeUsd;
+        }
 
         const settings = await Settings.findOneAndUpdate(
             {},
@@ -38,6 +44,7 @@ exports.updateSettings = async (req, res) => {
         respond(res, 200, true, "Settings updated", {
             cbmRate: settings.cbmRate,
             usdToGhsRate: settings.usdToGhsRate,
+            minFeeUsd: settings.minFeeUsd,
         });
     } catch (err) {
         respond(res, 500, false, "Failed to update settings");
