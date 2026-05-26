@@ -4,6 +4,7 @@ const settingsSchema = new mongoose.Schema(
     {
         cbmRate: { type: Number, default: 230 },
         usdToGhsRate: { type: Number, default: 15.2 },
+        minFeeUsd: { type: Number, default: 3 },
     },
     { timestamps: true }
 );
