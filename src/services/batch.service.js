@@ -584,6 +584,10 @@ async function processShippedBatch(parsedData, uploadedBy) {
   let newItems     = 0;
   let matchedItems = 0;
 
+  // The packing list carries one ETA in its metadata block. Every item on the
+  // list inherits it unless the row had its own expected-delivery date.
+  const etaDate = safeDate(eta);
+
   for (const item of items) {
     const customerId = await findUserByPhone(item.customerPhone);
     const found      = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
@@ -602,7 +606,7 @@ async function processShippedBatch(parsedData, uploadedBy) {
       found.quantity            = item.quantity            ?? found.quantity;
       found.quantityRaw         = item.quantityRaw         || found.quantityRaw;
       found.receivingDate       = item.receivingDate       || found.receivingDate;
-      found.estimatedDelivery   = item.estimatedDelivery   || found.estimatedDelivery;
+      found.estimatedDelivery   = item.estimatedDelivery   || etaDate || found.estimatedDelivery;
       found.freightTerm         = item.freightTerm         || found.freightTerm;
       found.freightAmount       = item.freightAmount       ?? found.freightAmount;
       found.loan                = item.loan                ?? found.loan;
@@ -623,6 +627,7 @@ async function processShippedBatch(parsedData, uploadedBy) {
     } else {
       await ShipmentItem.create({
         ...item,
+        estimatedDelivery: item.estimatedDelivery || etaDate,
         customerId,
         status:       "shipped",
         shippedBatch: batch._id,
@@ -752,19 +757,40 @@ async function validateBatch(buffer) {
 
 // ─── Lookup helpers ───────────────────────────────────────────────────────────
 
+// Staff-only fields stripped from all public lookups. containerRef and
+// estimatedDelivery ARE returned, but only for items already loaded on a
+// container — see sanitizePublicItem.
+const PUBLIC_LOOKUP_SELECT = "-staffNotes -customerId -heldReason -reassignedTo -stageHistory";
+
+// Goods still at the origin warehouse must not expose a container number or
+// ETA — those only exist once the item is on a loaded packing list.
+const PRE_LOADING_STATUSES = new Set(["in_warehouse", "held"]);
+
+function sanitizePublicItem(item) {
+  if (item && PRE_LOADING_STATUSES.has(item.status)) {
+    delete item.containerRef;
+    delete item.estimatedDelivery;
+  }
+  return item;
+}
+
 async function lookupByPhone(normalised) {
-  return ShipmentItem.find({ customerPhone: normalised })
+  const items = await ShipmentItem.find({ customerPhone: normalised })
     .sort({ updatedAt: -1 })
-    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
+    .select(PUBLIC_LOOKUP_SELECT)
     .populate("intakeBatch",  "batchCode stage createdAt")
-    .populate("shippedBatch", "batchCode stage createdAt");
+    .populate("shippedBatch", "batchCode stage createdAt")
+    .lean();
+  return items.map(sanitizePublicItem);
 }
 
 async function lookupByWaybill(waybill) {
-  return ShipmentItem.findOne({ waybillNo: waybill })
-    .select("-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef")
+  const item = await ShipmentItem.findOne({ waybillNo: waybill })
+    .select(PUBLIC_LOOKUP_SELECT)
     .populate("intakeBatch",  "batchCode stage createdAt")
-    .populate("shippedBatch", "batchCode stage createdAt");
+    .populate("shippedBatch", "batchCode stage createdAt")
+    .lean();
+  return sanitizePublicItem(item);
 }
 
 module.exports = {
@@ -780,4 +806,6 @@ module.exports = {
   normalisePhone,
   lookupByPhone,
   lookupByWaybill,
+  sanitizePublicItem,
+  PRE_LOADING_STATUSES,
 };

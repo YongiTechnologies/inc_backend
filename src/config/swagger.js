@@ -4,7 +4,7 @@ const options = {
   definition: {
     openapi: "3.0.0",
     info: {
-      title: "I&C Logistics API",
+      title: "Clinette Shipping & Logistics API",
       version: "1.0.0",
       description: "API for managing logistics tracking, GPS devices, and shipments across Ghana and international routes",
       contact: {

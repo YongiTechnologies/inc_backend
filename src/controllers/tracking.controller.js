@@ -105,6 +105,7 @@ async function myItems(req, res, next) {
       page:       parseInt(page),
       limit:      Math.min(parseInt(limit), 50),
       customerId: req.user._id,
+      publicView: true,
     });
     return respond(res, 200, true, "Your shipment items", result);
   } catch (err) { next(err); }

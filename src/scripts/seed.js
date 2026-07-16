@@ -81,8 +81,8 @@ async function seed() {
     { status: "picked_up",        location: { address: "Guangzhou Wholesale Market", city: "Guangzhou", country: "China" }, note: "Collected from supplier.",            carrier: "China Post", daysAgo: 8 },
     { status: "in_transit",       location: { address: "Kotoka Intl Airport",        city: "Accra",     country: "Ghana" }, note: "Arrived in Ghana.",                   carrier: "Kenya Airways Cargo", daysAgo: 4 },
     { status: "customs",          location: { address: "Tema Port",                  city: "Tema",      country: "Ghana" }, note: "Customs cleared.",                    daysAgo: 3 },
-    { status: "in_transit",       location: { address: "Accra Main Hub",             city: "Accra",     country: "Ghana" }, note: "Dispatched to Kumasi.",               carrier: "I&C Logistics Co.", daysAgo: 1 },
-    { status: "out_for_delivery", location: { address: "Kumasi Hub",                 city: "Kumasi",    country: "Ghana" }, note: "With delivery rider.",                carrier: "I&C Logistics Co.", hoursAgo: 7 },
+    { status: "in_transit",       location: { address: "Accra Main Hub",             city: "Accra",     country: "Ghana" }, note: "Dispatched to Kumasi.",               carrier: "Clinette Shipping & Logistics", daysAgo: 1 },
+    { status: "out_for_delivery", location: { address: "Kumasi Hub",                 city: "Kumasi",    country: "Ghana" }, note: "With delivery rider.",                carrier: "Clinette Shipping & Logistics", hoursAgo: 7 },
     { status: "delivered",        location: { address: "Kejetia Market",             city: "Kumasi",    country: "Ghana" }, note: "Package delivered. Received by Maame Ama.", hoursAgo: 5 },
   ];
 

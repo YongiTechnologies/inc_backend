@@ -12,13 +12,15 @@ const {
   processArrivedBatch,
   validateBatch,
   normalisePhone,
+  sanitizePublicItem,
 } = require("../services/batch.service");
 const { respond } = require("../utils/response");
 
 // Fields stripped before returning data to public/customer callers.
-// containerRef is the physical container number (e.g. MSBU7337022) — staff-only.
+// containerRef and estimatedDelivery are returned only for items already
+// loaded on a container — sanitizePublicItem removes them for warehouse goods.
 const PUBLIC_ITEM_SELECT =
-  "-staffNotes -customerId -heldReason -reassignedTo -stageHistory -containerRef";
+  "-staffNotes -customerId -heldReason -reassignedTo -stageHistory";
 
 // ─── File validation ──────────────────────────────────────────────────────────
 
@@ -276,7 +278,8 @@ async function getMyBatchItems(req, res, next) {
         .select(PUBLIC_ITEM_SELECT)
         .populate("intakeBatch",  "batchCode stage createdAt")
         .populate("shippedBatch", "batchCode stage createdAt")
-        .populate("arrivedBatch", "batchCode stage createdAt"),
+        .populate("arrivedBatch", "batchCode stage createdAt")
+        .lean(),
       ShipmentItem.countDocuments(filter),
     ]);
 
@@ -291,6 +294,7 @@ async function getMyBatchItems(req, res, next) {
 
     const grouped = { in_warehouse: [], shipped: [], customs: [], out_for_delivery: [], delivered: [], held: [] };
     items.forEach((item) => {
+      sanitizePublicItem(item);
       if (grouped[item.status]) grouped[item.status].push(item);
     });
 

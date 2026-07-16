@@ -23,6 +23,13 @@ const STATUS_TRANSITIONS = {
   held:             ["in_warehouse", "shipped", "pending"],
 };
 
+/**
+ * Statuses where the goods are still at the origin warehouse (not yet loaded
+ * on a container). Container number and ETA must not be shown to customers
+ * while an item is in one of these — they only exist once goods are loaded.
+ */
+const PRE_LOADING_STATUSES = new Set(["in_warehouse", "held"]);
+
 const STATUS_LABELS = {
   pending:          "Order Received",
   picked_up:        "Picked Up",
@@ -180,8 +187,11 @@ async function updateShipmentItem(id, data) {
 
 /**
  * Paginated list with optional filters.
+ * Pass publicView: true for customer-facing callers — strips staff-only fields
+ * (staffNotes, heldReason, stageHistory internals) and hides container number
+ * and ETA for items not yet loaded on a container.
  */
-async function listShipmentItems({ page = 1, limit = 20, status, search, customerId } = {}) {
+async function listShipmentItems({ page = 1, limit = 20, status, search, customerId, publicView = false } = {}) {
   const filter = {};
   if (status)     filter.status = status;
   if (customerId) filter.customerId = customerId;
@@ -196,16 +206,32 @@ async function listShipmentItems({ page = 1, limit = 20, status, search, custome
     ];
   }
 
-  const [items, total] = await Promise.all([
-    ShipmentItem.find(filter)
-      .sort({ updatedAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
+  let query = ShipmentItem.find(filter)
+    .sort({ updatedAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit);
+
+  if (publicView) {
+    query = query.select("-staffNotes -heldReason -reassignedTo -stageHistory -specialInstructions");
+  } else {
+    query = query
       .populate("customerId", "name email phone")
-      .populate("assignedTo", "name")
-      .lean(),
+      .populate("assignedTo", "name");
+  }
+
+  const [items, total] = await Promise.all([
+    query.lean(),
     ShipmentItem.countDocuments(filter),
   ]);
+
+  if (publicView) {
+    for (const item of items) {
+      if (PRE_LOADING_STATUSES.has(item.status)) {
+        delete item.containerRef;
+        delete item.estimatedDelivery;
+      }
+    }
+  }
 
   return { items, pagination: { total, page, limit, pages: Math.ceil(total / limit) } };
 }
@@ -291,9 +317,10 @@ function buildItemResponse(item, options = {}) {
     timestamp:        stage.updatedAt,
   }));
 
-  // containerRef (physical container number, e.g. MSBU7337022) is intentionally
-  // omitted from this response. This function is the source for the public
-  // /api/tracking/:trackingNumber endpoint — containerRef is staff-only.
+  // Container number and ETA are only exposed once the goods are loaded on a
+  // container (status past in_warehouse/held). Warehouse goods have neither.
+  const isLoaded = !PRE_LOADING_STATUSES.has(item.status);
+
   const response = {
     waybillNo:           item.waybillNo,
     invoiceNo:           item.invoiceNo,
@@ -321,11 +348,12 @@ function buildItemResponse(item, options = {}) {
       isFragile:         item.isFragile,
       requiresCustoms:   item.requiresCustoms,
     },
+    containerNo: (isLoaded || options.includeInternal) ? item.containerRef || null : null,
     dates: {
       created:           item.createdAt,
       intakeDate:        item.intakeDate,
       receivingDate:     item.receivingDate,
-      estimatedDelivery: item.estimatedDelivery,
+      estimatedDelivery: (isLoaded || options.includeInternal) ? item.estimatedDelivery : null,
       delivered:         item.deliveredAt || null,
     },
     progressPercent: progressMap[item.status] || 0,
@@ -358,4 +386,5 @@ module.exports = {
   getStats,
   STATUS_TRANSITIONS,
   STATUS_LABELS,
+  PRE_LOADING_STATUSES,
 };
