@@ -27,4 +27,10 @@ router.patch(
   ctrl.updateContainerLoading,
 );
 
+router.delete(
+  "/container-loadings/:id",
+  authenticate, authorize("employee", "admin"),
+  ctrl.deleteContainerLoading,
+);
+
 module.exports = router;

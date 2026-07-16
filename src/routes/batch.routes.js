@@ -196,6 +196,36 @@ router.post("/batches/shipped",  ...staffOnly, upload.single("file"), ctrl.uploa
  */
 router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploadArrived);
 
+/**
+ * @swagger
+ * /batches/{id}:
+ *   delete:
+ *     tags: [Batches]
+ *     summary: Retract (delete) a wrong upload — reverses everything the batch did
+ *     description: >
+ *       Deletes the batch and undoes its effects, so a wrong Excel file can be
+ *       retracted the instant it is uploaded, at any stage.
+ *       Intake — items created by the upload are deleted.
+ *       Shipped — matched items return to in_warehouse (container ref, ETA and
+ *       invoice figures cleared), items created by the list are deleted,
+ *       auto-held items are un-held, and the auto-created ContainerLoading is removed.
+ *       Arrived — items return to shipped and the container rolls back from arrived.
+ *       Blocked (409) when items have since moved to a later stage — retract the
+ *       later batch first.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Upload retracted }
+ *       404: { description: Batch not found }
+ *       409: { description: Items have progressed — retract the later batch first }
+ */
+router.delete("/batches/:id", ...staffOnly, ctrl.deleteBatch);
+
 // =============================================================================
 // BATCH LIST & DETAIL (staff)
 // =============================================================================

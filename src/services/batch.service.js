@@ -702,6 +702,172 @@ async function processShippedBatch(parsedData, uploadedBy) {
   };
 }
 
+// ─── Retraction: undo a wrong upload ──────────────────────────────────────────
+//
+// Deletes a batch and reverses everything it did, so staff can immediately
+// retract a wrong Excel file at any stage. Retraction is blocked when items
+// from the batch have since moved to a later stage — the later batch must be
+// retracted first (retract in reverse order: arrived → shipped → intake).
+
+class BatchRetractionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "BatchRetractionError";
+  }
+}
+
+async function retractIntakeBatch(batch) {
+  const progressed = await ShipmentItem.countDocuments({
+    intakeBatch: batch._id,
+    $or: [
+      { shippedBatch: { $ne: null } },
+      { arrivedBatch: { $ne: null } },
+      { status: { $nin: ["in_warehouse", "held"] } },
+    ],
+  });
+  if (progressed > 0) {
+    throw new BatchRetractionError(
+      `Cannot retract: ${progressed} item(s) from this intake batch have already been shipped or changed status. Retract the later batch first.`
+    );
+  }
+
+  const deleted = await ShipmentItem.deleteMany({ intakeBatch: batch._id });
+  await Batch.findByIdAndDelete(batch._id);
+
+  return {
+    stage:        "intake",
+    batchCode:    batch.batchCode,
+    deletedItems: deleted.deletedCount,
+    summary:      `Intake batch ${batch.batchCode} retracted — ${deleted.deletedCount} item(s) deleted.`,
+  };
+}
+
+async function retractShippedBatch(batch) {
+  const progressed = await ShipmentItem.countDocuments({
+    shippedBatch: batch._id,
+    $or: [{ arrivedBatch: { $ne: null } }, { status: { $nin: ["shipped"] } }],
+  });
+  if (progressed > 0) {
+    throw new BatchRetractionError(
+      `Cannot retract: ${progressed} item(s) from this packing list have already arrived or changed status. Retract the arrived batch first.`
+    );
+  }
+
+  // Items created directly by this packing list (their first history entry is
+  // this batch) never existed at intake — delete them outright.
+  const deleted = await ShipmentItem.deleteMany({
+    shippedBatch: batch._id,
+    "stageHistory.0.batchId": batch._id,
+  });
+
+  // Items matched from intake — send them back to the warehouse and clear the
+  // loading-specific fields this upload set (container, ETA, invoice figures).
+  const reverted = await ShipmentItem.updateMany(
+    { shippedBatch: batch._id },
+    {
+      $set: {
+        status:            "in_warehouse",
+        shippedBatch:      null,
+        containerRef:      null,
+        receivingDate:     null,
+        estimatedDelivery: null,
+        freightTerm:       null,
+        freightAmount:     null,
+        loan:              null,
+        interest:          null,
+        otherFee:          null,
+        invoiceAmount:     null,
+      },
+      $pull: { stageHistory: { batchId: batch._id } },
+    }
+  );
+
+  // Items auto-held only because they were missing from this (wrong) list
+  const unheld = await ShipmentItem.updateMany(
+    {
+      status:       "held",
+      stageHistory: { $elemMatch: { batchId: batch._id, status: "held" } },
+    },
+    {
+      $set:  { status: "in_warehouse", heldReason: null },
+      $pull: { stageHistory: { batchId: batch._id } },
+    }
+  );
+
+  // Container record auto-created from this packing list
+  const containers = await ContainerLoading.deleteMany({ batchRef: batch._id });
+
+  await Batch.findByIdAndDelete(batch._id);
+
+  return {
+    stage:             "shipped",
+    batchCode:         batch.batchCode,
+    deletedItems:      deleted.deletedCount,
+    revertedItems:     reverted.modifiedCount,
+    unheldItems:       unheld.modifiedCount,
+    deletedContainers: containers.deletedCount,
+    summary:
+      `Packing list ${batch.batchCode} retracted — ${reverted.modifiedCount} item(s) returned to warehouse, ` +
+      `${deleted.deletedCount} deleted, ${unheld.modifiedCount} un-held, ${containers.deletedCount} container(s) removed.`,
+  };
+}
+
+async function retractArrivedBatch(batch) {
+  const progressed = await ShipmentItem.countDocuments({
+    arrivedBatch: batch._id,
+    status:       { $nin: ["customs"] },
+  });
+  if (progressed > 0) {
+    throw new BatchRetractionError(
+      `Cannot retract: ${progressed} item(s) from this arrival list have already moved past customs.`
+    );
+  }
+
+  const reverted = await ShipmentItem.updateMany(
+    { arrivedBatch: batch._id },
+    {
+      $set:  { status: "shipped", arrivedBatch: null, arrivalDate: null },
+      $pull: { stageHistory: { batchId: batch._id } },
+    }
+  );
+
+  // Roll the container back from arrived → shipped
+  const containerNumber = batch.containerRefs?.[0]?.id;
+  let revertedContainers = 0;
+  if (containerNumber) {
+    const res = await ContainerLoading.updateOne(
+      { containerNumber: containerNumber.toUpperCase(), status: "arrived" },
+      { $set: { status: "shipped", actualArrivalDate: null } }
+    );
+    revertedContainers = res.modifiedCount;
+  }
+
+  await Batch.findByIdAndDelete(batch._id);
+
+  return {
+    stage:              "arrived",
+    batchCode:          batch.batchCode,
+    revertedItems:      reverted.modifiedCount,
+    revertedContainers,
+    summary:
+      `Arrival batch ${batch.batchCode} retracted — ${reverted.modifiedCount} item(s) returned to shipped` +
+      (revertedContainers ? `, container ${containerNumber} rolled back to shipped.` : "."),
+  };
+}
+
+async function retractBatch(batchId) {
+  const batch = await Batch.findById(batchId);
+  if (!batch) return null;
+
+  switch (batch.stage) {
+    case "intake":  return retractIntakeBatch(batch);
+    case "shipped": return retractShippedBatch(batch);
+    case "arrived": return retractArrivedBatch(batch);
+    default:
+      throw new BatchRetractionError(`Unknown batch stage "${batch.stage}"`);
+  }
+}
+
 // ─── Validate (no DB writes) ──────────────────────────────────────────────────
 //
 // Returns a preview of what a real upload would do, suitable for the
@@ -795,6 +961,8 @@ async function lookupByWaybill(waybill) {
 
 module.exports = {
   DuplicateBatchError,
+  BatchRetractionError,
+  retractBatch,
   parseUnifiedSheet,
   parseIntakeSheet,
   parseShippedSheet,

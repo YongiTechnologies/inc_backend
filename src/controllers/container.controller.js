@@ -207,6 +207,40 @@ async function updateContainerLoading(req, res, next) {
 }
 
 /**
+ * DELETE /api/container-loadings/:id
+ * Delete a container loading (staff only) — e.g. created from a wrong upload.
+ * Also clears the container number off any items still referencing it so
+ * customers never see a container that no longer exists.
+ */
+async function deleteContainerLoading(req, res, next) {
+  try {
+    const container = await ContainerLoading.findById(req.params.id);
+    if (!container) return respond(res, 404, false, "Container not found");
+
+    const cleared = await ShipmentItem.updateMany(
+      { containerRef: container.containerNumber },
+      { $set: { containerRef: null } }
+    );
+
+    await container.deleteOne();
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "CONTAINER_DELETED",
+      targetModel: "ContainerLoading",
+      targetId:    req.params.id,
+      details:     { containerNumber: container.containerNumber, clearedItems: cleared.modifiedCount },
+      ip:          req.ip,
+    });
+
+    return respond(res, 200, true, "Container loading deleted", {
+      containerNumber: container.containerNumber,
+      clearedItems:    cleared.modifiedCount,
+    });
+  } catch (err) { next(err); }
+}
+
+/**
  * GET /api/container-loadings/staff
  * Staff-only full list including staffNotes, batchRef populated.
  */
@@ -244,5 +278,6 @@ module.exports = {
   getContainerLoading,
   createContainerLoading,
   updateContainerLoading,
+  deleteContainerLoading,
   listContainerLoadingsStaff,
 };

@@ -4,6 +4,8 @@ const ShipmentItem = require("../models/ShipmentItem");
 const audit        = require("../services/audit.service");
 const {
   DuplicateBatchError,
+  BatchRetractionError,
+  retractBatch,
   parseIntakeSheet,
   parseShippedSheet,
   parseArrivedSheet,
@@ -119,6 +121,31 @@ async function uploadArrived(req, res, next) {
       });
     }
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
+    next(err);
+  }
+}
+
+// ─── Retract (delete) a wrong upload ──────────────────────────────────────────
+
+async function deleteBatch(req, res, next) {
+  try {
+    const result = await retractBatch(req.params.id);
+    if (!result) return respond(res, 404, false, "Batch not found");
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "BATCH_RETRACTED",
+      targetModel: "Batch",
+      targetId:    req.params.id,
+      details:     result,
+      ip:          req.ip,
+    });
+
+    return respond(res, 200, true, "Upload retracted successfully", result);
+  } catch (err) {
+    if (err instanceof BatchRetractionError) {
+      return respond(res, 409, false, err.message);
+    }
     next(err);
   }
 }
@@ -478,6 +505,7 @@ module.exports = {
   uploadIntake,
   uploadShipped,
   uploadArrived,
+  deleteBatch,
   validateUpload,
   listBatches,
   getBatch,

@@ -20,4 +20,14 @@ jobs:
       - name: Deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --detach --service ${{ secrets.RAILWAY_SERVICE_NAME }}
+          RAILWAY_SERVICE_NAME: ${{ secrets.RAILWAY_SERVICE_NAME }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set. Add it in GitHub → Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          if [ -z "$RAILWAY_SERVICE_NAME" ]; then
+            echo "::error::RAILWAY_SERVICE_NAME secret is not set. Add it with the exact service name from your Railway dashboard."
+            exit 1
+          fi
+          railway up --detach --service "$RAILWAY_SERVICE_NAME"
