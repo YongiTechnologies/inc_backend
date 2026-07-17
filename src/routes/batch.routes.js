@@ -519,6 +519,31 @@ router.patch("/batches/items/:itemId/reassign", ...staffOnly, ctrl.reassignHeldI
  */
 router.patch("/batches/items/:itemId", ...staffOnly, ctrl.updateItem);
 
+/**
+ * @swagger
+ * /batches/items/{itemId}:
+ *   delete:
+ *     tags: [Batches]
+ *     summary: Delete a single shipment item (staff correction)
+ *     description: >
+ *       Permanently removes one shipment record — e.g. a row that was uploaded
+ *       or entered by mistake. Use DELETE /batches/{id} instead to retract an
+ *       entire wrong upload. The deletion is written to the audit log.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Shipment deleted }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden }
+ *       404: { description: Shipment not found }
+ */
+router.delete("/batches/items/:itemId", ...staffOnly, ctrl.deleteItem);
+
 // ─── Public tracking endpoints removed ───────────────────────────────────────
 // These have been consolidated into tracking.routes.js:
 // - GET /api/tracking/phone/:phone

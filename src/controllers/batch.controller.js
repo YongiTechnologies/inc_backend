@@ -501,11 +501,39 @@ async function updateItem(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// ─── Delete a single shipment item (staff correction) ─────────────────────────
+
+async function deleteItem(req, res, next) {
+  try {
+    const item = await ShipmentItem.findById(req.params.itemId);
+    if (!item) return respond(res, 404, false, "Shipment not found");
+
+    await item.deleteOne();
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "SHIPMENT_ITEM_DELETED",
+      targetModel: "ShipmentItem",
+      targetId:    item._id,
+      details:     {
+        waybillNo:    item.waybillNo,
+        status:       item.status,
+        customerName: item.customerName,
+        containerRef: item.containerRef,
+      },
+      ip: req.ip,
+    });
+
+    return respond(res, 200, true, "Shipment deleted", { waybillNo: item.waybillNo });
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   uploadIntake,
   uploadShipped,
   uploadArrived,
   deleteBatch,
+  deleteItem,
   validateUpload,
   listBatches,
   getBatch,
