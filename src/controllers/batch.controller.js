@@ -74,7 +74,9 @@ async function uploadShipped(req, res, next) {
   let batch;
   try {
     const parsed = parseShippedSheet(req.file.buffer);
-    const result = await processShippedBatch(parsed, req.user._id);
+    // Opt-in: hold warehouse items not on this packing list (off by default).
+    const autoHold = req.body.autoHold === "true" || req.body.autoHold === true;
+    const result = await processShippedBatch(parsed, req.user._id, { autoHold });
     batch = result.batch;
     await audit.log({
       performedBy: req.user._id,
@@ -426,7 +428,8 @@ async function reassignHeldItem(req, res, next) {
 async function validateUpload(req, res, next) {
   if (!validateFile(req, res)) return;
   try {
-    const result = await validateBatch(req.file.buffer);
+    const autoHold = req.body.autoHold === "true" || req.body.autoHold === true;
+    const result = await validateBatch(req.file.buffer, { autoHold });
     return respond(res, 200, true, "File parsed successfully", result);
   } catch (err) {
     next(err);

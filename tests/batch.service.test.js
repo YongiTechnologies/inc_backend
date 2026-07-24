@@ -351,3 +351,87 @@ describe("legacy positional intake (no header row)", () => {
     expect(result.items[0].customerPhone).toMatch(/^233/);
   });
 });
+
+// ─── Header-less container / packing list (N151-style) ────────────────────────
+
+describe("container list (no headers, positional)", () => {
+  test("title-row layout parses as shipped with container/batch and locations", () => {
+    const buf = buildXlsx([
+      // Title row — "-<batchRef>-<CONTAINER>"
+      ["12th/Jul 2026--N999-ABCU1234567", null, null, null, null, null, null, null],
+      [null,   "GH111", "0244000001", "Ama",  null,       2, 0.5, null],
+      [null,   "GH222", "0244000002", "Kojo", "KUMASI",   1, 0.3, "SHOES"],
+      [null,   "GH333", "0244000003", "Yaa",  "TAMALE",   3, 1.2, null],
+      [8888,   "GH444", "0244000004", "Kofi", "TAKORADI", 1, 0.2, null],
+      // Totals / junk row — no tracking, no phone → skipped
+      [null,   null,    null,         null,   null,      null, 50.5, null],
+    ]);
+    const result = parseUnifiedSheet(buf);
+
+    expect(result.stage).toBe("shipped");
+    expect(result.missingColumns).toHaveLength(0);
+    expect(result.metadata.CONTAINER_NUMBER).toBe("ABCU1234567");
+    expect(result.metadata.BATCH_REF).toBe("N999");
+    expect(result.items).toHaveLength(4);
+
+    const byWaybill = Object.fromEntries(result.items.map((i) => [i.waybillNo, i]));
+    expect(byWaybill.GH111.destinationCity).toBeNull();       // blank = Accra downstream
+    expect(byWaybill.GH222.destinationCity).toBe("KUMASI");
+    expect(byWaybill.GH333.destinationCity).toBe("TAMALE");
+    expect(byWaybill.GH444.destinationCity).toBe("TAKORADI");
+    expect(byWaybill.GH111.cbm).toBeCloseTo(0.5);
+    expect(byWaybill.GH111.customerPhone).toMatch(/^233/);
+  });
+
+  test("blank name is carried forward from a prior row with the same phone", () => {
+    const buf = buildXlsx([
+      ["1st/Jan 2026--N001-ABCU7654321", null, null, null, null, null, null, null],
+      [null, "TRK1", "0244000009", "CELESTINA", null, 1, 0.3, "CHAIR"],
+      [null, "TRK2", "0244000009", null,         null, 2, 4.7, "TENTS"], // continuation
+    ]);
+    const result = parseUnifiedSheet(buf);
+    const cont = result.items.find((i) => i.waybillNo === "TRK2");
+    expect(cont.customerName).toBe("CELESTINA");
+  });
+});
+
+// ─── Opt-in auto-hold on packing-list upload ──────────────────────────────────
+
+describe("processShippedBatch auto-hold is opt-in", () => {
+  const parsed = {
+    metadata: { CONTAINER_NUMBER: "CTRTEST01", BATCH_REF: "N777" },
+    items:    [{ waybillNo: "WBHOLD1", customerPhone: "233200000001" }],
+    skippedRows: [],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockBatchFindOne.mockResolvedValue(null);
+    mockBatchFind.mockReturnValue({ select: () => Promise.resolve([]) });
+    mockBatchCreate.mockImplementation((doc) => Promise.resolve({ _id: "batchHold", ...doc }));
+    mockBatchFindByIdUpdate.mockResolvedValue(null);
+    mockBatchFindById.mockResolvedValue({ _id: "batchHold", batchCode: "PKL-N777" });
+    mockItemFindOne.mockResolvedValue(null); // new item, no match
+    mockItemCreate.mockResolvedValue({});
+    mockItemUpdateMany.mockResolvedValue({ modifiedCount: 5 });
+    mockUserFindOne.mockReturnValue({ select: () => Promise.resolve(null) });
+    mockContainerUpdate.mockResolvedValue({});
+  });
+
+  test("default (no options): does NOT hold warehouse items", async () => {
+    const result = await processShippedBatch(parsed, "user001");
+    expect(mockItemUpdateMany).not.toHaveBeenCalled();
+    expect(result.batch).toBeDefined();
+  });
+
+  test("autoHold=true: holds warehouse items not on the list", async () => {
+    await processShippedBatch(parsed, "user001", { autoHold: true });
+    expect(mockItemUpdateMany).toHaveBeenCalledTimes(1);
+    const [query] = mockItemUpdateMany.mock.calls[0];
+    expect(query.status).toBe("in_warehouse");
+    // Smarter matching: excludes items whose phone is on the list
+    expect(query.$or).toEqual(
+      expect.arrayContaining([{ customerPhone: expect.anything() }])
+    );
+  });
+});

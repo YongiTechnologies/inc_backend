@@ -124,6 +124,127 @@ const TRACKING_ALIASES_SET = new Set(
   COLUMN_ALIASES.TRACKING_NO.map(normalizeHeaderCell)
 );
 
+// ─── Container / packing-list layout (no header row) ──────────────────────────
+//
+// Some warehouse "container lists" arrive with no column headers at all — just a
+// title row like "9th/Jun 2026--N151-CAIU4815359" followed by positional data:
+//
+//   col 0: shipping mark (optional)     col 5: quantity ("2pallet+17")
+//   col 1: tracking number              col 6: CBM
+//   col 2: customer phone / number      col 7: goods / description
+//   col 3: customer name                col 10: date
+//   col 4: LOCATION (blank = Accra)     col 11 & 13: remarks / fees
+//                                       col 12: batch ref (e.g. "N151")
+//
+// This is distinct from the legacy 5-column intake sheet, so it needs its own
+// detector and parser. Detection uses two independent signals: a title row that
+// embeds "-<batchRef>-<CONTAINERNO>", and/or a column where a letter-prefixed
+// short code (the batch ref) repeats across most rows.
+
+const CONTAINER_LIST_COLS = {
+  MARK: 0, TRACKING: 1, PHONE: 2, NAME: 3, LOCATION: 4,
+  QTY: 5, CBM: 6, GOODS: 7, DATE: 10, REMARK_A: 11, BATCH: 12, REMARK_B: 13,
+};
+
+// "-N151-CAIU4815359" → batchRef "N151", containerNumber "CAIU4815359"
+const CONTAINER_TITLE_RE = /-\s*([A-Za-z]{1,3}\d+[A-Za-z]?)\s*-\s*([A-Z]{3,4}\d{6,7})\b/;
+// Batch-ref shape: a letter prefix + digits (e.g. N151). Requiring a letter
+// keeps the date column (bare 5-digit serials like 46181) from matching.
+const BATCH_CODE_RE = /^[A-Z]{1,3}\d{2,6}[A-Z]?$/;
+
+function detectContainerList(rows) {
+  let batchRef = null;
+  let containerNumber = null;
+
+  // Signal A — title row in the first few rows.
+  for (let i = 0; i < Math.min(4, rows.length); i++) {
+    const cell = rows[i] && rows[i][0];
+    if (typeof cell === "string") {
+      const m = cell.match(CONTAINER_TITLE_RE);
+      if (m) { batchRef = m[1].toUpperCase(); containerNumber = m[2].toUpperCase(); break; }
+    }
+  }
+
+  // Signal B — a column where the same letter-prefixed short code repeats.
+  const dataRows = rows.filter((r) => r && r.some((c) => c !== null && c !== undefined && c !== ""));
+  if (dataRows.length < 3) return batchRef ? { batchRef, containerNumber } : null;
+
+  const nCols = Math.max(...dataRows.map((r) => r.length));
+  const threshold = Math.max(3, Math.floor(dataRows.length * 0.4));
+  let repeatedVal = null;
+  for (let col = 0; col < nCols && !repeatedVal; col++) {
+    const counts = {};
+    for (const r of dataRows) {
+      const v = r[col];
+      if (v === null || v === undefined || v === "") continue;
+      const s = String(v).trim().toUpperCase();
+      if (!BATCH_CODE_RE.test(s)) continue;
+      counts[s] = (counts[s] || 0) + 1;
+      if (counts[s] >= threshold) { repeatedVal = s; break; }
+    }
+  }
+
+  if (!batchRef && !repeatedVal) return null;
+  return { batchRef: batchRef || repeatedVal, containerNumber };
+}
+
+function parseContainerListRows(rows, det) {
+  const C = CONTAINER_LIST_COLS;
+  const items = [];
+  const skippedRows = [];
+  const lastNameByPhone = {};
+  const containerRef = det.containerNumber || det.batchRef || null;
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
+
+    const trackingRaw = row[C.TRACKING];
+    const phoneRaw    = row[C.PHONE];
+    // Title row, totals row, and blank rows have neither a tracking nor a phone.
+    if (!trackingRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
+
+    const waybills = splitWaybills(trackingRaw);
+    if (!waybills.length) { skippedRows.push(i + 1); continue; }
+
+    let cneeStr = row[C.NAME] ? String(row[C.NAME]).trim() : "";
+    if (/^\d+(\.\d+)?$/.test(cneeStr)) cneeStr = ""; // numeric "name" = summary artifact
+
+    const phone = normalisePhone(phoneRaw);
+    if (!cneeStr && phone && lastNameByPhone[phone]) cneeStr = lastNameByPhone[phone];
+    else if (cneeStr && phone) lastNameByPhone[phone] = cneeStr;
+
+    const location = row[C.LOCATION] ? String(row[C.LOCATION]).trim().toUpperCase() : null;
+    const qtyRaw   = row[C.QTY];
+    const cbmRaw   = row[C.CBM];
+    const cbm      = (cbmRaw !== null && cbmRaw !== undefined) ? parseFloat(cbmRaw) : null;
+    const goods    = row[C.GOODS] ? String(row[C.GOODS]).trim() : null;
+    const remarks  = [row[C.REMARK_A], row[C.REMARK_B]]
+      .filter((v) => v !== null && v !== undefined && String(v).trim())
+      .map((v) => String(v).trim())
+      .join(" | ") || null;
+
+    for (const waybill of waybills) {
+      items.push({
+        waybillNo:          waybill,
+        customerPhoneRaw:   phoneRaw ? String(phoneRaw).trim() : null,
+        customerPhone:      phone,
+        customerName:       cneeStr || null,
+        destinationCity:    location,
+        goodsType:          goods,
+        quantity:           parseQuantity(qtyRaw),
+        quantityRaw:        (qtyRaw !== null && qtyRaw !== undefined) ? String(qtyRaw).trim() : null,
+        cbm:                (cbm !== null && !isNaN(cbm)) ? cbm : null,
+        productDescription: goods,
+        containerRef,
+        remarks,
+      });
+    }
+  }
+
+  return { items, skippedRows };
+}
+
 // ─── Unified sheet parser ─────────────────────────────────────────────────────
 //
 // Single entry point for all three spreadsheet variants.
@@ -194,9 +315,17 @@ function parseUnifiedSheet(buffer) {
     });
   }
 
+  // ── 4b. Header-less container / packing list detection ────────────────────
+  // A header-less sheet is either a legacy 5-column intake or a positional
+  // container list (packing list). Detect the latter so it parses correctly.
+  const containerList = headerRowIdx === -1 ? detectContainerList(rows) : null;
+
   // ── 5. Stage fallback when STAGE field is absent (legacy files) ───────────
   if (!stage) {
-    if (headerRowIdx === -1) {
+    if (containerList) {
+      // Header-less container list = a packing / loading list.
+      stage = "shipped";
+    } else if (headerRowIdx === -1) {
       // No header row → legacy positional intake
       stage = "intake";
     } else if (colIndex.CBM !== undefined || colIndex.COLLECT_OF !== undefined || colIndex.PAYMENT_TERM !== undefined) {
@@ -217,7 +346,7 @@ function parseUnifiedSheet(buffer) {
   const missingColumns = [];
   if (headerRowIdx !== -1 && colIndex.TRACKING_NO === undefined) {
     missingColumns.push("TRACKING_NO");
-  } else if (headerRowIdx === -1 && stage !== "intake") {
+  } else if (headerRowIdx === -1 && !containerList && stage !== "intake") {
     missingColumns.push("TRACKING_NO");
   }
 
@@ -237,12 +366,29 @@ function parseUnifiedSheet(buffer) {
   setMeta("BATCH_DATE",       v => safeDate(v));
   setMeta("WAREHOUSE",        v => String(v).trim());
 
+  // Container list carries its container/batch identity in the title row.
+  if (containerList) {
+    if (containerList.containerNumber && !metadata.CONTAINER_NUMBER) {
+      metadata.CONTAINER_NUMBER = containerList.containerNumber;
+    }
+    if (containerList.batchRef && !metadata.BATCH_REF) {
+      metadata.BATCH_REF = containerList.batchRef;
+    }
+  }
+
   // ── 8. Parse data rows ────────────────────────────────────────────────────
   const items       = [];
   const skippedRows = [];
   const containerRef = metadata.CONTAINER_NUMBER || metadata.BATCH_REF || null;
 
-  if (headerRowIdx === -1) {
+  if (containerList) {
+    const parsed = parseContainerListRows(rows, {
+      containerNumber: metadata.CONTAINER_NUMBER || null,
+      batchRef:        metadata.BATCH_REF || null,
+    });
+    items.push(...parsed.items);
+    skippedRows.push(...parsed.skippedRows);
+  } else if (headerRowIdx === -1) {
     // Legacy positional intake: col 0=invoiceNo, 1=waybill, 2=phone, 3=qty, 4=date
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -541,7 +687,8 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
 
 // ─── Processor: Shipped batch (packing list / loading list) ───────────────────
 
-async function processShippedBatch(parsedData, uploadedBy) {
+async function processShippedBatch(parsedData, uploadedBy, options = {}) {
+  const { autoHold = false } = options;
   const { metadata, items, skippedRows } = parsedData;
   const {
     CONTAINER_NUMBER: containerNumber,
@@ -643,32 +790,44 @@ async function processShippedBatch(parsedData, uploadedBy) {
     }
   }
 
-  // Auto-hold items still in_warehouse from recent intake batches not in this list
-  const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-  const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
-  const recentBatchIds = recentBatches.map((b) => b._id);
+  // Auto-hold items still in_warehouse from recent intake batches not in this
+  // list. This is OFF by default — a mismatched or partial packing list would
+  // otherwise wrongly hold every other warehouse parcel. When enabled, an item
+  // is only held if BOTH its waybill AND its customer phone are absent from the
+  // list, so a customer present under a different waybill is never held.
+  let heldItems = 0;
+  if (autoHold) {
+    const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
+    const recentBatchIds = recentBatches.map((b) => b._id);
+    const uploadedPhones = new Set(items.map((i) => i.customerPhone).filter(Boolean));
 
-  const heldResult = await ShipmentItem.updateMany(
-    {
-      status:      "in_warehouse",
-      intakeBatch: { $in: recentBatchIds },
-      waybillNo:   { $nin: Array.from(uploadedWaybills) },
-    },
-    {
-      $set:  { status: "held", heldReason: `Not included in packing list ${batchCode}` },
-      $push: {
-        stageHistory: {
-          stage:     "shipped",
-          status:    "held",
-          batchId:   batch._id,
-          updatedAt: new Date(),
-          note:      `Auto-held — not found in packing list ${batchCode}`,
-        },
+    const heldResult = await ShipmentItem.updateMany(
+      {
+        status:      "in_warehouse",
+        intakeBatch: { $in: recentBatchIds },
+        waybillNo:   { $nin: Array.from(uploadedWaybills) },
+        $or: [
+          { customerPhone: null },
+          { customerPhone: { $nin: Array.from(uploadedPhones) } },
+        ],
       },
-    }
-  );
+      {
+        $set:  { status: "held", heldReason: `Not included in packing list ${batchCode}` },
+        $push: {
+          stageHistory: {
+            stage:     "shipped",
+            status:    "held",
+            batchId:   batch._id,
+            updatedAt: new Date(),
+            note:      `Auto-held — not found in packing list ${batchCode}`,
+          },
+        },
+      }
+    );
+    heldItems = heldResult.modifiedCount;
+  }
 
-  const heldItems  = heldResult.modifiedCount;
   const totalItems = newItems + matchedItems;
   await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems, matchedItems, heldItems });
 
@@ -873,7 +1032,8 @@ async function retractBatch(batchId) {
 // Returns a preview of what a real upload would do, suitable for the
 // "Preview" button in BulkUploadModal. Never persists anything.
 
-async function validateBatch(buffer) {
+async function validateBatch(buffer, options = {}) {
+  const { autoHold = false } = options;
   const parsed = parseUnifiedSheet(buffer);
   const { stage, metadata, items, skippedRows, headerWarnings, missingColumns } = parsed;
 
@@ -888,13 +1048,18 @@ async function validateBatch(buffer) {
   const willUpdate = waybills.filter((w) => existingSet.has(w)).length;
 
   let willHold = 0;
-  if (stage === "shipped") {
-    const cutoff        = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const recentBatches = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id").lean();
+  if (stage === "shipped" && autoHold) {
+    const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id").lean();
+    const uploadedPhones = [...new Set(items.map((i) => i.customerPhone).filter(Boolean))];
     willHold = await ShipmentItem.countDocuments({
       status:      "in_warehouse",
       intakeBatch: { $in: recentBatches.map((b) => b._id) },
       waybillNo:   { $nin: waybills },
+      $or: [
+        { customerPhone: null },
+        { customerPhone: { $nin: uploadedPhones } },
+      ],
     });
   }
 
