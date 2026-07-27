@@ -62,6 +62,7 @@ async function uploadIntake(req, res, next) {
       return respond(res, 409, false, `This intake file has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
         batchCode:  err.batchCode,
         uploadedAt: err.uploadedAt,
+        batchId:    err.batchId,
       });
     }
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
@@ -92,6 +93,7 @@ async function uploadShipped(req, res, next) {
       return respond(res, 409, false, `This packing list has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
         batchCode:  err.batchCode,
         uploadedAt: err.uploadedAt,
+        batchId:    err.batchId,
       });
     }
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});
@@ -120,6 +122,7 @@ async function uploadArrived(req, res, next) {
       return respond(res, 409, false, `This arrival file has already been uploaded (batch ${err.batchCode}, uploaded on ${new Date(err.uploadedAt).toLocaleDateString()}).`, {
         batchCode:  err.batchCode,
         uploadedAt: err.uploadedAt,
+        batchId:    err.batchId,
       });
     }
     if (batch?._id) await Batch.findByIdAndDelete(batch._id).catch(() => {});

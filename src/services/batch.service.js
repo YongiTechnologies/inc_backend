@@ -224,6 +224,15 @@ function parseContainerListRows(rows, det) {
       .map((v) => String(v).trim())
       .join(" | ") || null;
 
+    // When one cell holds several tracking numbers, the row's quantity and CBM
+    // are the COMBINED total for that group — split them across the trackings so
+    // the customer is not billed the full amount once per tracking (over-billing).
+    const share       = waybills.length;
+    const qtyTotal    = parseQuantity(qtyRaw);
+    const cbmValid    = (cbm !== null && !isNaN(cbm)) ? cbm : null;
+    const qtyPer      = qtyTotal != null ? qtyTotal / share : null;
+    const cbmPer      = cbmValid != null ? cbmValid / share : null;
+
     for (const waybill of waybills) {
       items.push({
         waybillNo:          waybill,
@@ -232,9 +241,9 @@ function parseContainerListRows(rows, det) {
         customerName:       cneeStr || null,
         destinationCity:    location,
         goodsType:          goods,
-        quantity:           parseQuantity(qtyRaw),
+        quantity:           qtyPer,
         quantityRaw:        (qtyRaw !== null && qtyRaw !== undefined) ? String(qtyRaw).trim() : null,
-        cbm:                (cbm !== null && !isNaN(cbm)) ? cbm : null,
+        cbm:                cbmPer,
         productDescription: goods,
         containerRef,
         remarks,
@@ -470,6 +479,14 @@ function parseUnifiedSheet(buffer) {
       const otherFee      = parseQuantity(get(row, "OTHER_FEE"));
       const invoiceAmount = parseQuantity(get(row, "INVOICE_AMOUNT"));
 
+      // A single cell can hold several tracking numbers whose quantity, CBM and
+      // financial amounts are the COMBINED total for the group. Split those
+      // additive values across the trackings so each is not billed the full
+      // amount (over-billing). share === 1 for normal rows → no change.
+      const share   = waybills.length;
+      const per     = (v) => (v != null ? v / share : v);
+      const cbmVal  = (cbm !== null && !isNaN(cbm)) ? cbm : null;
+
       for (const waybill of waybills) {
         const item = {
           waybillNo:          waybill,
@@ -478,18 +495,18 @@ function parseUnifiedSheet(buffer) {
           customerName:       cneeStr || null,
           destinationCity:    location,
           goodsType,
-          quantity:           qty,
+          quantity:           per(qty),
           quantityRaw:        qtyRaw !== null ? String(qtyRaw).trim() : null,
-          cbm:                (cbm !== null && !isNaN(cbm)) ? cbm : null,
+          cbm:                per(cbmVal),
           productDescription: description || goodsType,
           containerRef,
           remarks,
           freightTerm:    collectOF ? String(collectOF).trim() : null,
-          freightAmount:  paymentTerm,
-          loan,
-          interest,
-          otherFee,
-          invoiceAmount,
+          freightAmount:  per(paymentTerm),
+          loan:           per(loan),
+          interest:       per(interest),
+          otherFee:       per(otherFee),
+          invoiceAmount:  per(invoiceAmount),
           receivingDate:      metadata.LOADING_DATE || null,
           estimatedDelivery:  receivingDateParsed || null,
         };
@@ -622,6 +639,7 @@ class DuplicateBatchError extends Error {
     this.name       = "DuplicateBatchError";
     this.batchCode  = batchCode;
     this.uploadedAt = existingBatch.createdAt;
+    this.batchId    = existingBatch._id; // lets the UI offer "delete previous & retry"
   }
 }
 

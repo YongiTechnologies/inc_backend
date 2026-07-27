@@ -393,6 +393,82 @@ describe("container list (no headers, positional)", () => {
     const cont = result.items.find((i) => i.waybillNo === "TRK2");
     expect(cont.customerName).toBe("CELESTINA");
   });
+
+  test("two trackings in one cell split the row's qty and CBM (no over-billing)", () => {
+    const buf = buildXlsx([
+      ["3rd/Mar 2026--N222-ABCU2222222", null, null, null, null, null, null, null],
+      // One cell, two tracking numbers (newline-separated), qty 2 and CBM 0.1 for the pair
+      [null, "YT2588856695043\nYT2588856717578", "0242449310", "ELIZABETH", null, 2, 0.1, null],
+    ]);
+    const result = parseUnifiedSheet(buf);
+    const pair = result.items.filter((i) => i.customerPhone === "233242449310");
+    expect(pair).toHaveLength(2);
+    // 1 each making 2 — CBM 0.05 each summing to 0.1
+    expect(pair[0].quantity).toBeCloseTo(1);
+    expect(pair[1].quantity).toBeCloseTo(1);
+    expect(pair[0].cbm).toBeCloseTo(0.05);
+    expect(pair[1].cbm).toBeCloseTo(0.05);
+    expect(pair.reduce((s, i) => s + i.cbm, 0)).toBeCloseTo(0.1);
+  });
+});
+
+// ─── Multi-tracking split in headed packing lists ─────────────────────────────
+
+describe("headed packing list splits shared-cell trackings", () => {
+  test("qty, CBM and invoice amount are divided across the trackings", () => {
+    const buf = buildXlsx([
+      ["STAGE", "LOADING"],
+      [null, null], [null, null], [null, null], [null, null],
+      [null, null], [null, null], [null, null], [null, null], [null, null],
+      ["JOB NUMBER", "CNEE NAME", "PHONE NUMBER", "CBM", "QUANTITY", "INVOICE AMOUNT"],
+      ["TRKA TRKB", "Customer", "0244100001", 0.1, 2, 40],
+    ]);
+    const result = parseUnifiedSheet(buf);
+    expect(result.stage).toBe("shipped");
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].cbm).toBeCloseTo(0.05);
+    expect(result.items[0].quantity).toBeCloseTo(1);
+    expect(result.items[0].invoiceAmount).toBeCloseTo(20);
+    expect(result.items.reduce((s, i) => s + i.cbm, 0)).toBeCloseTo(0.1);
+  });
+
+  test("single tracking is unchanged (share = 1)", () => {
+    const buf = buildXlsx([
+      ["STAGE", "LOADING"],
+      [null, null], [null, null], [null, null], [null, null],
+      [null, null], [null, null], [null, null], [null, null], [null, null],
+      ["JOB NUMBER", "CNEE NAME", "PHONE NUMBER", "CBM", "QUANTITY"],
+      ["TRKONLY", "Customer", "0244100001", 0.3, 5],
+    ]);
+    const result = parseUnifiedSheet(buf);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].cbm).toBeCloseTo(0.3);
+    expect(result.items[0].quantity).toBeCloseTo(5);
+  });
+});
+
+// ─── Duplicate upload exposes the existing batch id ───────────────────────────
+
+describe("DuplicateBatchError carries batchId for replace-and-retry", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockBatchFind.mockReturnValue({ select: () => Promise.resolve([]) });
+  });
+
+  test("re-uploading an existing shipped batch throws with batchId", async () => {
+    const parsed = {
+      metadata: { BATCH_REF: "N333" },
+      items:    [{ waybillNo: "WB1", customerPhone: "233200000001" }],
+      skippedRows: [],
+    };
+    // An existing batch with the same batchCode is found
+    mockBatchFindOne.mockResolvedValue({ _id: "existing123", createdAt: new Date() });
+
+    await expect(processShippedBatch(parsed, "user001")).rejects.toMatchObject({
+      name:    "DuplicateBatchError",
+      batchId: "existing123",
+    });
+  });
 });
 
 // ─── Opt-in auto-hold on packing-list upload ──────────────────────────────────
