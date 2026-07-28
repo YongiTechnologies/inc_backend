@@ -2,6 +2,9 @@ const cron = require("node-cron");
 const AuditLog = require("../models/AuditLog");
 const RefreshToken = require("../models/RefreshToken");
 const { GpsPing } = require("../models/Gps");
+const ShipmentItem = require("../models/ShipmentItem");
+const Batch = require("../models/Batch");
+const ContainerLoading = require("../models/ContainerLoading");
 
 /**
  * Safe system-level cleanup — removes session garbage and raw telemetry only.
@@ -44,6 +47,39 @@ async function runCleanup() {
   }
 }
 
+// The exact phrase an admin must type to confirm a destructive purge.
+const PURGE_CONFIRM_PHRASE = "DELETE ALL DATA";
+
+/**
+ * DESTRUCTIVE — permanently deletes all operational data: every shipment item,
+ * batch, and container loading. There is NO undo.
+ *
+ * Deliberately KEEPS user accounts, settings/rates, audit logs, and GPS
+ * telemetry. Used to reset the goods data (e.g. after test/wrong uploads).
+ * Callers must pass the exact confirmation phrase.
+ */
+async function purgeOperationalData(confirmPhrase) {
+  if (confirmPhrase !== PURGE_CONFIRM_PHRASE) {
+    const err = new Error(`Confirmation phrase must be exactly "${PURGE_CONFIRM_PHRASE}".`);
+    err.code = "PURGE_NOT_CONFIRMED";
+    throw err;
+  }
+
+  const [items, batches, containers] = await Promise.all([
+    ShipmentItem.deleteMany({}),
+    Batch.deleteMany({}),
+    ContainerLoading.deleteMany({}),
+  ]);
+
+  const results = {
+    shipmentItems:     items.deletedCount,
+    batches:           batches.deletedCount,
+    containerLoadings: containers.deletedCount,
+  };
+  console.log(`[Purge] ${new Date().toISOString()} — operational data cleared`, results);
+  return results;
+}
+
 /**
  * Schedule: runs every day at 2:00 AM server time.
  */
@@ -55,4 +91,4 @@ function startCleanupScheduler() {
   console.log("✅ Cleanup scheduler started (daily at 2:00 AM)");
 }
 
-module.exports = { startCleanupScheduler, runCleanup };
+module.exports = { startCleanupScheduler, runCleanup, purgeOperationalData, PURGE_CONFIRM_PHRASE };

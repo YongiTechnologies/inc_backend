@@ -3,7 +3,8 @@ const router  = express.Router();
 const ctrl    = require("../controllers/admin.controller");
 const { authenticate, authorize } = require("../middleware/auth.middleware");
 const { validate, validators } = require("../utils/validators");
-const { runCleanup } = require("../services/cleanup.service");
+const { runCleanup, purgeOperationalData } = require("../services/cleanup.service");
+const audit = require("../services/audit.service");
 const { respond } = require("../utils/response");
 
 /**
@@ -341,6 +342,30 @@ router.post("/cleanup", authenticate, authorize("admin"), async (req, res, next)
     const results = await runCleanup();
     return respond(res, 200, true, "Cleanup complete", results);
   } catch (err) { next(err); }
+});
+
+/**
+ * DESTRUCTIVE — admin only. Permanently deletes ALL operational data
+ * (shipment items, batches, container loadings). Requires the exact
+ * confirmation phrase in the body. Keeps users, settings, and audit logs.
+ */
+router.post("/purge-operational-data", authenticate, authorize("admin"), async (req, res, next) => {
+  try {
+    const results = await purgeOperationalData(req.body?.confirm);
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "OPERATIONAL_DATA_PURGED",
+      targetModel: "System",
+      details:     results,
+      ip:          req.ip,
+    });
+    return respond(res, 200, true, "All operational data cleared", results);
+  } catch (err) {
+    if (err.code === "PURGE_NOT_CONFIRMED") {
+      return respond(res, 400, false, err.message);
+    }
+    next(err);
+  }
 });
 
 module.exports = router;
