@@ -134,15 +134,16 @@ async function uploadArrived(req, res, next) {
 
 async function deleteBatch(req, res, next) {
   try {
-    const result = await retractBatch(req.params.id);
+    const force  = req.query.force === "true";
+    const result = await retractBatch(req.params.id, { force });
     if (!result) return respond(res, 404, false, "Batch not found");
 
     await audit.log({
       performedBy: req.user._id,
-      action:      "BATCH_RETRACTED",
+      action:      force ? "BATCH_FORCE_RETRACTED" : "BATCH_RETRACTED",
       targetModel: "Batch",
       targetId:    req.params.id,
-      details:     result,
+      details:     { ...result, force },
       ip:          req.ip,
     });
 

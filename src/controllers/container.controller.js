@@ -193,16 +193,34 @@ async function updateContainerLoading(req, res, next) {
     Object.assign(container, updates);
     await container.save();
 
+    // When staff revise the ETA (e.g. arrival delayed), push it down to every
+    // shipment on this container so customers see the updated estimate too.
+    let itemsRetimed = 0;
+    if (updates.eta !== undefined && container.containerNumber) {
+      const etaDate = updates.eta ? new Date(updates.eta) : null;
+      if (etaDate === null || !isNaN(etaDate.getTime())) {
+        const r = await ShipmentItem.updateMany(
+          { containerRef: container.containerNumber },
+          { $set: { estimatedDelivery: etaDate } }
+        );
+        itemsRetimed = r.modifiedCount;
+      }
+    }
+
     await audit.log({
       performedBy: req.user._id,
       action:      "CONTAINER_UPDATED",
       targetModel: "ContainerLoading",
       targetId:    container._id,
-      details:     updates,
+      details:     { ...updates, itemsRetimed },
       ip:          req.ip,
     });
 
-    return respond(res, 200, true, "Container loading updated", container);
+    return respond(
+      res, 200, true,
+      itemsRetimed ? `Container loading updated — ${itemsRetimed} shipment ETA(s) synced` : "Container loading updated",
+      container
+    );
   } catch (err) { next(err); }
 }
 

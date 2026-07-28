@@ -36,9 +36,11 @@ const containerLoadingSchema = new mongoose.Schema(
     actualArrivalDate: { type: Date },  // when it actually arrived at POD
 
     // ── Status ─────────────────────────────────────────────────────────────────
+    // Lifecycle: loading → shipped → at_port (arrived at Tema Port, not yet at
+    // the company warehouse) → arrived (at warehouse) → ready (for pickup).
     status: {
       type:    String,
-      enum:    ["loading", "shipped", "arrived", "ready"],
+      enum:    ["loading", "shipped", "at_port", "arrived", "ready"],
       default: "loading",
       index:   true,
     },

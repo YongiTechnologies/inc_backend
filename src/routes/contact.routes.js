@@ -1,5 +1,6 @@
 const express = require("express");
 const router  = express.Router();
+const Joi     = require("joi");
 const ctrl    = require("../controllers/contact.controller");
 const { validate } = require("../utils/validators");
 
@@ -60,12 +61,12 @@ const { validate } = require("../utils/validators");
  *       429:
  *         description: Too many requests
  */
-router.post("/contact", validate({
-  name:    require("joi").string().min(2).required(),
-  email:   require("joi").string().email().required(),
-  phone:   require("joi").string().optional(),
-  subject: require("joi").string().required(),
-  message: require("joi").string().min(10).required(),
-}), ctrl.submitContact);
+router.post("/contact", validate(Joi.object({
+  name:    Joi.string().min(2).required(),
+  email:   Joi.string().email().required(),
+  phone:   Joi.string().allow("").optional(),
+  subject: Joi.string().required(),
+  message: Joi.string().min(10).required(),
+})), ctrl.submitContact);
 
 module.exports = router;

@@ -893,19 +893,21 @@ class BatchRetractionError extends Error {
   }
 }
 
-async function retractIntakeBatch(batch) {
-  const progressed = await ShipmentItem.countDocuments({
-    intakeBatch: batch._id,
-    $or: [
-      { shippedBatch: { $ne: null } },
-      { arrivedBatch: { $ne: null } },
-      { status: { $nin: ["in_warehouse", "held"] } },
-    ],
-  });
-  if (progressed > 0) {
-    throw new BatchRetractionError(
-      `Cannot retract: ${progressed} item(s) from this intake batch have already been shipped or changed status. Retract the later batch first.`
-    );
+async function retractIntakeBatch(batch, { force = false } = {}) {
+  if (!force) {
+    const progressed = await ShipmentItem.countDocuments({
+      intakeBatch: batch._id,
+      $or: [
+        { shippedBatch: { $ne: null } },
+        { arrivedBatch: { $ne: null } },
+        { status: { $nin: ["in_warehouse", "held"] } },
+      ],
+    });
+    if (progressed > 0) {
+      throw new BatchRetractionError(
+        `Cannot retract: ${progressed} item(s) from this intake batch have already been shipped or changed status. Retract the later batch first.`
+      );
+    }
   }
 
   const deleted = await ShipmentItem.deleteMany({ intakeBatch: batch._id });
@@ -919,15 +921,17 @@ async function retractIntakeBatch(batch) {
   };
 }
 
-async function retractShippedBatch(batch) {
-  const progressed = await ShipmentItem.countDocuments({
-    shippedBatch: batch._id,
-    $or: [{ arrivedBatch: { $ne: null } }, { status: { $nin: ["shipped"] } }],
-  });
-  if (progressed > 0) {
-    throw new BatchRetractionError(
-      `Cannot retract: ${progressed} item(s) from this packing list have already arrived or changed status. Retract the arrived batch first.`
-    );
+async function retractShippedBatch(batch, { force = false } = {}) {
+  if (!force) {
+    const progressed = await ShipmentItem.countDocuments({
+      shippedBatch: batch._id,
+      $or: [{ arrivedBatch: { $ne: null } }, { status: { $nin: ["shipped"] } }],
+    });
+    if (progressed > 0) {
+      throw new BatchRetractionError(
+        `Cannot retract: ${progressed} item(s) from this packing list have already arrived or changed status. Retract the arrived batch first.`
+      );
+    }
   }
 
   // Items created directly by this packing list (their first history entry is
@@ -989,15 +993,17 @@ async function retractShippedBatch(batch) {
   };
 }
 
-async function retractArrivedBatch(batch) {
-  const progressed = await ShipmentItem.countDocuments({
-    arrivedBatch: batch._id,
-    status:       { $nin: ["customs"] },
-  });
-  if (progressed > 0) {
-    throw new BatchRetractionError(
-      `Cannot retract: ${progressed} item(s) from this arrival list have already moved past customs.`
-    );
+async function retractArrivedBatch(batch, { force = false } = {}) {
+  if (!force) {
+    const progressed = await ShipmentItem.countDocuments({
+      arrivedBatch: batch._id,
+      status:       { $nin: ["customs"] },
+    });
+    if (progressed > 0) {
+      throw new BatchRetractionError(
+        `Cannot retract: ${progressed} item(s) from this arrival list have already moved past customs.`
+      );
+    }
   }
 
   const reverted = await ShipmentItem.updateMany(
@@ -1032,14 +1038,16 @@ async function retractArrivedBatch(batch) {
   };
 }
 
-async function retractBatch(batchId) {
+// force=true bypasses the "items have progressed" guard and reverses the batch
+// anyway (admin escape hatch for undoing a wrong upload). Use with care.
+async function retractBatch(batchId, { force = false } = {}) {
   const batch = await Batch.findById(batchId);
   if (!batch) return null;
 
   switch (batch.stage) {
-    case "intake":  return retractIntakeBatch(batch);
-    case "shipped": return retractShippedBatch(batch);
-    case "arrived": return retractArrivedBatch(batch);
+    case "intake":  return retractIntakeBatch(batch, { force });
+    case "shipped": return retractShippedBatch(batch, { force });
+    case "arrived": return retractArrivedBatch(batch, { force });
     default:
       throw new BatchRetractionError(`Unknown batch stage "${batch.stage}"`);
   }
