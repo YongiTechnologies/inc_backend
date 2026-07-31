@@ -79,7 +79,11 @@ const COLUMN_ALIASES = {
   INVOICE_AMOUNT: ["INVOICE AMOUNT"],
   INVOICE_NO:     ["INVOICE NO", "INVOICE N0", "INVOICE NUMBER", "INVOICE NO.", "INVOICE N0.", "INVOICE"],
   INTAKE_DATE:    ["DATE", "INTAKE DATE"],
-  RECEIVING_DATE: ["RECEIVING DATE", "RECEIVE DATE", "RECEIPT DATE", "EXPECTED DELIVERY", "EXPECTED DELIVERY DATE", "DELIVERY DATE", "ARRIVAL DATE PER ITEM"],
+  // Date the parcel was RECEIVED at the origin warehouse — shown as "Date Received".
+  RECEIVED_DATE:  ["RECEIVING DATE", "RECEIVE DATE", "RECEIPT DATE", "DATE RECEIVED", "RECEIVED DATE"],
+  // Per-item expected delivery / ETA — kept separate from the received date so
+  // the two never get conflated (they are different dates).
+  EXPECTED_DELIVERY: ["EXPECTED DELIVERY", "EXPECTED DELIVERY DATE", "DELIVERY DATE", "ARRIVAL DATE PER ITEM", "ETA PER ITEM"],
 };
 
 const METADATA_ALIASES = {
@@ -218,6 +222,9 @@ function parseContainerListRows(rows, det) {
     const qtyRaw   = row[C.QTY];
     const cbmRaw   = row[C.CBM];
     const cbm      = (cbmRaw !== null && cbmRaw !== undefined) ? parseFloat(cbmRaw) : null;
+    // received at warehouse — only trust a real Date cell (cellDates conversion),
+    // never a bare Excel serial number which safeDate would misread as 1970.
+    const receivedAt = row[C.DATE] instanceof Date ? row[C.DATE] : null;
     const goods    = row[C.GOODS] ? String(row[C.GOODS]).trim() : null;
     const remarks  = [row[C.REMARK_A], row[C.REMARK_B]]
       .filter((v) => v !== null && v !== undefined && String(v).trim())
@@ -247,6 +254,7 @@ function parseContainerListRows(rows, det) {
         productDescription: goods,
         containerRef,
         remarks,
+        intakeDate:         receivedAt,
       });
     }
   }
@@ -467,8 +475,12 @@ function parseUnifiedSheet(buffer) {
       const qty         = parseQuantity(qtyRaw);
       const cbmRaw      = get(row, "CBM");
       const cbm         = (cbmRaw !== null && cbmRaw !== undefined) ? parseFloat(cbmRaw) : null;
-      const receivingDateRaw = get(row, "RECEIVING_DATE");
-      const receivingDateParsed = receivingDateRaw ? safeDate(receivingDateRaw) : null;
+      // Received-at-warehouse date (col "RECEIVING DATE") vs per-item ETA
+      // ("EXPECTED DELIVERY") — kept as two distinct dates.
+      const receivedRaw    = get(row, "RECEIVED_DATE");
+      const receivedParsed = receivedRaw ? safeDate(receivedRaw) : null;
+      const expectedRaw    = get(row, "EXPECTED_DELIVERY");
+      const expectedParsed = expectedRaw ? safeDate(expectedRaw) : null;
       const invoiceRaw  = get(row, "INVOICE_NO");
 
       // Financial fields from packing-list columns
@@ -508,12 +520,16 @@ function parseUnifiedSheet(buffer) {
           otherFee:       per(otherFee),
           invoiceAmount:  per(invoiceAmount),
           receivingDate:      metadata.LOADING_DATE || null,
-          estimatedDelivery:  receivingDateParsed || null,
+          // Received-at-warehouse date drives "Date Received" for customers.
+          intakeDate:         receivedParsed || null,
+          // ETA — only a per-item column value here; the container ETA is applied
+          // as a fallback in processShippedBatch.
+          estimatedDelivery:  expectedParsed || null,
         };
         if (stage === "intake") {
           item.invoiceNo  = invoiceRaw ? String(invoiceRaw).trim() : null;
           const dateCell  = get(row, "INTAKE_DATE");
-          item.intakeDate = safeDate(dateCell) || metadata.BATCH_DATE || null;
+          item.intakeDate = safeDate(dateCell) || receivedParsed || metadata.BATCH_DATE || null;
         }
         items.push(item);
       }

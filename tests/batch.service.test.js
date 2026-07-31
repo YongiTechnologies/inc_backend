@@ -447,6 +447,43 @@ describe("headed packing list splits shared-cell trackings", () => {
   });
 });
 
+// ─── Received date vs ETA are distinct dates ──────────────────────────────────
+
+describe("RECEIVING DATE maps to received (intakeDate), not ETA", () => {
+  test("packing list RECEIVING DATE → intakeDate; estimatedDelivery stays empty", () => {
+    const buf = buildXlsx([
+      ["STAGE", "LOADING"],
+      [null, null], [null, null], [null, null], [null, null],
+      [null, null], [null, null], [null, null], [null, null], [null, null],
+      ["JOB NUMBER", "CNEE NAME", "PHONE NUMBER", "CBM", "RECEIVING DATE"],
+      ["TRKR1", "Hannah", "0244100001", 0.07, new Date("2026-06-03")],
+    ]);
+    const result = parseUnifiedSheet(buf);
+    expect(result.stage).toBe("shipped");
+    const item = result.items[0];
+    expect(item.intakeDate).toBeInstanceOf(Date);
+    expect(item.intakeDate.getUTCFullYear()).toBe(2026);
+    expect(item.intakeDate.getUTCMonth()).toBe(5); // June (0-indexed)
+    // The received date must NOT leak into the ETA field.
+    expect(item.estimatedDelivery).toBeNull();
+  });
+
+  test("EXPECTED DELIVERY column → estimatedDelivery (separate from received)", () => {
+    const buf = buildXlsx([
+      ["STAGE", "LOADING"],
+      [null, null], [null, null], [null, null], [null, null],
+      [null, null], [null, null], [null, null], [null, null], [null, null],
+      ["JOB NUMBER", "CNEE NAME", "PHONE NUMBER", "CBM", "RECEIVING DATE", "EXPECTED DELIVERY"],
+      ["TRKR2", "Hannah", "0244100001", 0.07, new Date("2026-06-03"), new Date("2026-07-29")],
+    ]);
+    const item = parseUnifiedSheet(buf).items[0];
+    // Two different dates: received in June, ETA in July — never equal.
+    expect(item.intakeDate.getUTCMonth()).toBe(5);       // June
+    expect(item.estimatedDelivery.getUTCMonth()).toBe(6); // July
+    expect(item.intakeDate.getTime()).not.toBe(item.estimatedDelivery.getTime());
+  });
+});
+
 // ─── Duplicate upload exposes the existing batch id ───────────────────────────
 
 describe("DuplicateBatchError carries batchId for replace-and-retry", () => {
