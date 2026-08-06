@@ -472,10 +472,34 @@ async function updateItem(req, res, next) {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     }
 
-    if (Object.keys(updates).length === 0) {
+    // Manual status change — staff can move an item that the automatic
+    // waybill matching missed (e.g. from the warehouse onto a container).
+    // Recorded in the timeline so the change is visible to customers.
+    const MANUAL_STATUSES = [
+      "in_warehouse", "shipped", "customs",
+      "out_for_delivery", "delivered", "held", "returned", "failed",
+    ];
+    let statusChanged = false;
+    if (req.body.status !== undefined && String(req.body.status) !== item.status) {
+      const newStatus = String(req.body.status);
+      if (!MANUAL_STATUSES.includes(newStatus)) {
+        return respond(res, 400, false, `Invalid status. Allowed: ${MANUAL_STATUSES.join(", ")}`);
+      }
+      item.status = newStatus;
+      if (newStatus !== "held") item.heldReason = undefined;
+      item.stageHistory.push({
+        status:    newStatus,
+        updatedAt: new Date(),
+        updatedBy: req.user._id,
+        note:      "Status updated manually by staff",
+      });
+      statusChanged = true;
+    }
+
+    if (Object.keys(updates).length === 0 && !statusChanged) {
       return respond(
         res, 400, false,
-        `No valid fields provided. Updatable fields: ${ALLOWED_FIELDS.join(", ")}`
+        `No valid fields provided. Updatable fields: ${ALLOWED_FIELDS.join(", ")}, status`
       );
     }
 
@@ -500,7 +524,7 @@ async function updateItem(req, res, next) {
       action:      "BATCH_ITEM_UPDATE",
       targetModel: "ShipmentItem",
       targetId:    item._id,
-      details:     updates,
+      details:     statusChanged ? { ...updates, status: item.status } : updates,
       ip:          req.ip,
     });
 
