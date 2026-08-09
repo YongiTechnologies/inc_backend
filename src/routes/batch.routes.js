@@ -225,6 +225,7 @@ router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploa
  *       409: { description: Items have progressed — retract the later batch first }
  */
 router.delete("/batches/:id", ...staffOnly, ctrl.deleteBatch);
+router.patch("/batches/:id",  ...staffOnly, ctrl.updateBatch);
 
 // =============================================================================
 // BATCH LIST & DETAIL (staff)

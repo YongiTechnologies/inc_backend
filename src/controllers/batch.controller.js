@@ -156,6 +156,37 @@ async function deleteBatch(req, res, next) {
   }
 }
 
+// ─── Update batch (rename / notes) ────────────────────────────────────────────
+
+async function updateBatch(req, res, next) {
+  try {
+    const batch = await Batch.findById(req.params.id);
+    if (!batch) return respond(res, 404, false, "Batch not found");
+
+    const updates = {};
+    if (req.body.label !== undefined) updates.label = String(req.body.label).trim() || undefined;
+    if (req.body.notes !== undefined) updates.notes = String(req.body.notes).trim() || undefined;
+
+    if (Object.keys(updates).length === 0) {
+      return respond(res, 400, false, "No valid fields provided. Updatable fields: label, notes");
+    }
+
+    Object.assign(batch, updates);
+    await batch.save();
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "BATCH_UPDATED",
+      targetModel: "Batch",
+      targetId:    batch._id,
+      details:     updates,
+      ip:          req.ip,
+    });
+
+    return respond(res, 200, true, "Batch updated", batch);
+  } catch (err) { next(err); }
+}
+
 // ─── Batch list & detail ──────────────────────────────────────────────────────
 
 async function listBatches(req, res, next) {
@@ -573,6 +604,7 @@ module.exports = {
   uploadShipped,
   uploadArrived,
   deleteBatch,
+  updateBatch,
   deleteItem,
   validateUpload,
   listBatches,
