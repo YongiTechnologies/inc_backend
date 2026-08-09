@@ -8,6 +8,12 @@ const { escapeRegex } = require("../utils/validators");
  * e.g. delivered → pending is not allowed.
  * Supports both traditional workflow and batch workflow statuses.
  */
+// Every status a ShipmentItem may hold (mirrors the model enum).
+const VALID_STATUSES = new Set([
+  "pending", "picked_up", "in_transit", "customs", "out_for_delivery",
+  "delivered", "failed", "returned", "in_warehouse", "shipped", "held",
+]);
+
 const STATUS_TRANSITIONS = {
   pending:          ["picked_up", "failed"],
   picked_up:        ["in_transit", "failed"],
@@ -81,10 +87,13 @@ async function updateItemStatus({ itemId, updatedBy, status, location, note, int
   const item = await ShipmentItem.findById(itemId).populate("customerId", "name email");
   if (!item) throw new Error("ShipmentItem not found");
 
-  const allowed = STATUS_TRANSITIONS[item.status] || [];
-  if (!allowed.includes(status)) {
+  // Staff-initiated checkpoints may correct or jump status (e.g. warehouse →
+  // customs), so we don't enforce the STATUS_TRANSITIONS graph here — we only
+  // reject values that aren't real statuses. STATUS_TRANSITIONS is still used
+  // elsewhere as guidance for the expected happy path.
+  if (!VALID_STATUSES.has(status)) {
     throw new Error(
-      `Invalid transition: "${item.status}" → "${status}". Allowed: [${allowed.join(", ") || "none — terminal status"}]`
+      `Unknown status "${status}". Valid statuses: [${[...VALID_STATUSES].join(", ")}]`
     );
   }
 

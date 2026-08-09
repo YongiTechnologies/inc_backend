@@ -264,9 +264,18 @@ async function deleteContainerLoading(req, res, next) {
  */
 async function listContainerLoadingsStaff(req, res, next) {
   try {
-    const { page = 1, limit = 20, status } = req.query;
+    const { page = 1, limit = 20, status, search } = req.query;
     const filter = {};
     if (status) filter.status = status;
+    if (search) {
+      const esc = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = [
+        { containerNumber: { $regex: esc, $options: "i" } },
+        { blNumber:        { $regex: esc, $options: "i" } },
+        { vesselName:      { $regex: esc, $options: "i" } },
+        { sealNumber:      { $regex: esc, $options: "i" } },
+      ];
+    }
 
     const [containers, total] = await Promise.all([
       ContainerLoading.find(filter)

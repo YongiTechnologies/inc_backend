@@ -160,9 +160,13 @@ async function deleteBatch(req, res, next) {
 
 async function listBatches(req, res, next) {
   try {
-    const { page = 1, limit = 20, stage } = req.query;
+    const { page = 1, limit = 20, stage, search } = req.query;
     const filter = {};
     if (stage) filter.stage = stage;
+    if (search) {
+      const esc = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.batchCode = { $regex: esc, $options: "i" };
+    }
 
     const [batches, total] = await Promise.all([
       Batch.find(filter)
@@ -240,7 +244,12 @@ async function listAllItems(req, res, next) {
     const { page = 1, limit = 20, status, search, phone } = req.query;
     const filter = {};
 
-    if (status) filter.status = status;
+    // status may be a single value or a comma-separated list (e.g.
+    // "in_warehouse,held" for the Goods Received list).
+    if (status) {
+      const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
+      filter.status = statuses.length > 1 ? { $in: statuses } : statuses[0];
+    }
 
     if (phone) {
       const norm = normalisePhone(phone);
