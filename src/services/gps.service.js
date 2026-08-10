@@ -323,6 +323,8 @@ function mapStatusToStage(status) {
     returned: 'returned',
     in_warehouse: 'in_warehouse',
     shipped: 'shipped',
+    at_port: 'at_port',
+    ready_for_pickup: 'ready_for_pickup',
     held: 'held',
   };
   return stageMap[status] || status;

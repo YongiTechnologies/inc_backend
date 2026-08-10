@@ -15,6 +15,14 @@ router.get(
   ctrl.listContainerLoadingsStaff,
 );
 
+// Full item list for one container — the union of items assigned by
+// containerRef and items from the packing list that created it.
+router.get(
+  "/container-loadings/:id/items",
+  authenticate, authorize("employee", "admin"),
+  ctrl.getContainerItemsStaff,
+);
+
 router.post(
   "/container-loadings",
   authenticate, authorize("employee", "admin"),

@@ -11,21 +11,24 @@ const { escapeRegex } = require("../utils/validators");
 // Every status a ShipmentItem may hold (mirrors the model enum).
 const VALID_STATUSES = new Set([
   "pending", "picked_up", "in_transit", "customs", "out_for_delivery",
-  "delivered", "failed", "returned", "in_warehouse", "shipped", "held",
+  "delivered", "failed", "returned", "in_warehouse", "shipped",
+  "at_port", "ready_for_pickup", "held",
 ]);
 
 const STATUS_TRANSITIONS = {
   pending:          ["picked_up", "failed"],
   picked_up:        ["in_transit", "failed"],
   in_transit:       ["in_transit", "customs", "out_for_delivery", "failed"],
-  customs:          ["in_transit", "out_for_delivery", "failed", "returned"],
+  customs:          ["in_transit", "ready_for_pickup", "out_for_delivery", "failed", "returned"],
   out_for_delivery: ["delivered", "failed"],
   delivered:        [],           // terminal
   failed:           ["in_transit", "returned"],
   returned:         [],           // terminal
-  // Batch workflow statuses
+  // Batch workflow statuses — mirror the ContainerLoading lifecycle
   in_warehouse:     ["shipped", "held", "pending"],
-  shipped:          ["pending", "in_transit", "customs", "held"],
+  shipped:          ["pending", "at_port", "in_transit", "customs", "held"],
+  at_port:          ["customs", "ready_for_pickup", "out_for_delivery", "held"],
+  ready_for_pickup: ["out_for_delivery", "delivered", "held"],
   held:             ["in_warehouse", "shipped", "pending"],
 };
 
@@ -47,6 +50,8 @@ const STATUS_LABELS = {
   returned:         "Returned to Sender",
   in_warehouse:     "In Warehouse",
   shipped:          "Shipped",
+  at_port:          "At Tema Port",
+  ready_for_pickup: "Ready for Pickup",
   held:             "On Hold",
 };
 
@@ -289,6 +294,8 @@ function mapStatusToStage(status) {
     returned: 'returned',
     in_warehouse: 'in_warehouse',
     shipped: 'shipped',
+    at_port: 'at_port',
+    ready_for_pickup: 'ready_for_pickup',
     held: 'held',
   };
   return stageMap[status] || status;
@@ -309,6 +316,8 @@ function buildItemResponse(item, options = {}) {
     returned: 0,
     in_warehouse: 10,
     shipped: 30,
+    at_port: 50,
+    ready_for_pickup: 90,
     held: 20,
   };
 

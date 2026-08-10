@@ -23,9 +23,15 @@ async function publicTrackByPhone(req, res, next) {
       return respond(res, 404, false, "No shipments found for this phone number");
     }
 
-    const grouped = { in_warehouse: [], shipped: [], held: [] };
+    // Every status gets a bucket — an item whose status has no key here would
+    // silently vanish from the customer's phone lookup.
+    const grouped = {
+      in_warehouse: [], shipped: [], at_port: [], customs: [],
+      ready_for_pickup: [], out_for_delivery: [], delivered: [], held: [],
+    };
     items.forEach((item) => {
       if (grouped[item.status]) grouped[item.status].push(item);
+      else (grouped[item.status] = []).push(item);
     });
 
     return respond(res, 200, true, "Shipments retrieved", { total: items.length, grouped });

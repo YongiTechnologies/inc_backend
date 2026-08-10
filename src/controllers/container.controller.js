@@ -1,6 +1,13 @@
 const ContainerLoading = require("../models/ContainerLoading");
 const ShipmentItem     = require("../models/ShipmentItem");
 const audit            = require("../services/audit.service");
+const {
+  CONTAINER_TO_ITEM_STATUS,
+  containerRefMatcher,
+  containerItemFilter,
+  applyBulkStatus,
+  describeBulkResult,
+} = require("../services/logistics.service");
 const { respond }      = require("../utils/response");
 
 // Fields never returned to public callers
@@ -104,11 +111,15 @@ async function getContainerLoading(req, res, next) {
 
     if (!container) return respond(res, 404, false, "Container not found");
 
-    // Fetch items that belong to this container (public-safe fields only)
-    const items = await ShipmentItem.find({ containerRef: container.containerNumber })
-      .select("waybillNo customerName destinationCity productDescription quantity status updatedAt -_id")
-      .sort({ updatedAt: -1 })
-      .lean();
+    // Items belonging to this container, from either direction — see
+    // containerItemFilter (public-safe fields only).
+    const filter = containerItemFilter(container);
+    const items  = filter
+      ? await ShipmentItem.find(filter)
+          .select("waybillNo customerName destinationCity productDescription quantity status updatedAt -_id")
+          .sort({ updatedAt: -1 })
+          .lean()
+      : [];
 
     return respond(res, 200, true, "Container retrieved", { container, items });
   } catch (err) { next(err); }
@@ -189,21 +200,35 @@ async function updateContainerLoading(req, res, next) {
       return respond(res, 400, false, "No valid fields provided");
     }
 
+    const previousStatus = container.status;
     updates.updatedBy = req.user._id;
     Object.assign(container, updates);
     await container.save();
 
+    // Everything loaded on this container, whichever tab put it there.
+    const itemFilter = containerItemFilter(container);
+
     // When staff revise the ETA (e.g. arrival delayed), push it down to every
     // shipment on this container so customers see the updated estimate too.
     let itemsRetimed = 0;
-    if (updates.eta !== undefined && container.containerNumber) {
+    if (updates.eta !== undefined && itemFilter) {
       const etaDate = updates.eta ? new Date(updates.eta) : null;
       if (etaDate === null || !isNaN(etaDate.getTime())) {
-        const r = await ShipmentItem.updateMany(
-          { containerRef: container.containerNumber },
-          { $set: { estimatedDelivery: etaDate } }
-        );
+        const r = await ShipmentItem.updateMany(itemFilter, { $set: { estimatedDelivery: etaDate } });
         itemsRetimed = r.modifiedCount;
+      }
+    }
+
+    // Moving the container moves its cargo. Held/delivered/returned/failed
+    // items are left alone — see PROTECTED_ITEM_STATUSES.
+    let statusSync = null;
+    if (updates.status !== undefined && container.status !== previousStatus) {
+      const itemStatus = CONTAINER_TO_ITEM_STATUS[container.status];
+      if (itemStatus && itemFilter) {
+        statusSync = await applyBulkStatus(itemFilter, itemStatus, {
+          performedBy: req.user._id,
+          note:        `Container ${container.containerNumber} moved to ${container.status.replace(/_/g, " ")}`,
+        });
       }
     }
 
@@ -212,13 +237,18 @@ async function updateContainerLoading(req, res, next) {
       action:      "CONTAINER_UPDATED",
       targetModel: "ContainerLoading",
       targetId:    container._id,
-      details:     { ...updates, itemsRetimed },
+      details:     { ...updates, previousStatus, itemsRetimed, statusSync },
       ip:          req.ip,
     });
 
+    const notes = [
+      itemsRetimed ? `${itemsRetimed} shipment ETA(s) synced` : null,
+      describeBulkResult(statusSync) || null,
+    ].filter(Boolean);
+
     return respond(
       res, 200, true,
-      itemsRetimed ? `Container loading updated — ${itemsRetimed} shipment ETA(s) synced` : "Container loading updated",
+      notes.length ? `Container loading updated — ${notes.join("; ")}` : "Container loading updated",
       container
     );
   } catch (err) { next(err); }
@@ -236,7 +266,7 @@ async function deleteContainerLoading(req, res, next) {
     if (!container) return respond(res, 404, false, "Container not found");
 
     const cleared = await ShipmentItem.updateMany(
-      { containerRef: container.containerNumber },
+      { containerRef: containerRefMatcher(container.containerNumber) },
       { $set: { containerRef: null } }
     );
 
@@ -299,6 +329,36 @@ async function listContainerLoadingsStaff(req, res, next) {
   } catch (err) { next(err); }
 }
 
+/**
+ * GET /api/container-loadings/:id/items
+ * Staff-only full item list for a container — the union of items assigned by
+ * containerRef and items that arrived on the packing list that created it.
+ * This is what the Container Loadings tab expands to, so a shipment attached to
+ * a container from the Goods Received tab shows up here immediately.
+ */
+async function getContainerItemsStaff(req, res, next) {
+  try {
+    const container = await ContainerLoading.findById(req.params.id).lean();
+    if (!container) return respond(res, 404, false, "Container not found");
+
+    const { status } = req.query;
+    const filter = containerItemFilter(container);
+    if (!filter) return respond(res, 200, true, "Container items retrieved", { items: [], total: 0 });
+
+    if (status) filter.status = status;
+
+    const items = await ShipmentItem.find(filter)
+      .sort({ updatedAt: -1 })
+      .populate("customerId",   "name email phone")
+      .populate("intakeBatch",  "batchCode stage createdAt")
+      .populate("shippedBatch", "batchCode stage createdAt")
+      .populate("arrivedBatch", "batchCode stage createdAt")
+      .lean();
+
+    return respond(res, 200, true, "Container items retrieved", { items, total: items.length });
+  } catch (err) { next(err); }
+}
+
 module.exports = {
   listContainerLoadings,
   searchContainerLoadings,
@@ -307,4 +367,5 @@ module.exports = {
   updateContainerLoading,
   deleteContainerLoading,
   listContainerLoadingsStaff,
+  getContainerItemsStaff,
 };

@@ -225,6 +225,44 @@ router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploa
  *       409: { description: Items have progressed — retract the later batch first }
  */
 router.delete("/batches/:id", ...staffOnly, ctrl.deleteBatch);
+
+/**
+ * @swagger
+ * /batches/{id}:
+ *   patch:
+ *     tags: [Batches]
+ *     summary: Rename an upload, edit its notes, or move all its shipments at once
+ *     description: >
+ *       `label` and `notes` are cosmetic. `status` is the upload-level
+ *       equivalent of advancing a container — it applies one status to every
+ *       shipment in the batch. Items that are held, delivered, returned or
+ *       failed are skipped; the response message reports how many moved and how
+ *       many were left alone.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             minProperties: 1
+ *             properties:
+ *               label:  { type: string, example: "April 20th intake" }
+ *               notes:  { type: string }
+ *               status:
+ *                 type: string
+ *                 enum: [in_warehouse, shipped, at_port, customs, ready_for_pickup, out_for_delivery, delivered, held, returned, failed]
+ *     responses:
+ *       200: { description: Batch updated }
+ *       400: { description: No valid fields, or invalid status }
+ *       404: { description: Batch not found }
+ */
 router.patch("/batches/:id",  ...staffOnly, ctrl.updateBatch);
 
 // =============================================================================
@@ -315,7 +353,7 @@ router.get("/batches/:id",       ...staffOnly, ctrl.getBatch);
  *         schema: { type: string }
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [in_warehouse, shipped, held] }
+ *         schema: { type: string, enum: [in_warehouse, shipped, at_port, customs, ready_for_pickup, out_for_delivery, delivered, held] }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
@@ -344,7 +382,7 @@ router.get("/batches/:id/items", ...staffOnly, ctrl.getBatchItems);
  *     parameters:
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [in_warehouse, shipped, held] }
+ *         schema: { type: string, enum: [in_warehouse, shipped, at_port, customs, ready_for_pickup, out_for_delivery, delivered, held] }
  *       - in: query
  *         name: phone
  *         schema: { type: string }
@@ -383,7 +421,7 @@ router.get("/batch-shipments",      ...staffOnly, ctrl.listAllItems);
  *     parameters:
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [in_warehouse, shipped, held] }
+ *         schema: { type: string, enum: [in_warehouse, shipped, at_port, customs, ready_for_pickup, out_for_delivery, delivered, held] }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
@@ -493,7 +531,17 @@ router.patch("/batches/items/:itemId/reassign", ...staffOnly, ctrl.reassignHeldI
  *                 example: 0.15
  *               containerRef:
  *                 type: string
+ *                 description: >
+ *                   Attaches the shipment to that container. It inherits the
+ *                   container's ETA and — unless `status` is sent in the same
+ *                   request — the status the container implies, so it appears
+ *                   under the container on the Container Loadings tab.
  *                 example: "MSBU7337022"
+ *               status:
+ *                 type: string
+ *                 enum: [in_warehouse, shipped, at_port, customs, ready_for_pickup, out_for_delivery, delivered, held, returned, failed]
+ *                 description: Manual status override. Recorded in the item's timeline.
+ *                 example: "at_port"
  *               freightAmount:
  *                 type: number
  *                 description: Collect O/F amount from the packing list

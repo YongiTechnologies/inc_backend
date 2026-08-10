@@ -71,8 +71,12 @@ const shipmentItemSchema = new mongoose.Schema(
 
     // ── Status ────────────────────────────────────────────────────────────────
     // Full shipment lifecycle — supports both batch workflow and traditional flow
-    // Batch workflow: in_warehouse → shipped → (optional: pending → ... → delivered)
+    // Batch workflow: in_warehouse → shipped → at_port → customs → ready_for_pickup
     // Traditional: pending → picked_up → in_transit → customs → out_for_delivery → delivered
+    //
+    // at_port and ready_for_pickup mirror the ContainerLoading lifecycle so a
+    // container status change maps 1:1 onto the shipments loaded in it — see
+    // CONTAINER_TO_ITEM_STATUS in services/logistics.service.js.
     status: {
       type: String,
       enum: [
@@ -86,6 +90,8 @@ const shipmentItemSchema = new mongoose.Schema(
         "returned",
         "in_warehouse",
         "shipped",
+        "at_port",
+        "ready_for_pickup",
         "held",
       ],
       default: "in_warehouse",

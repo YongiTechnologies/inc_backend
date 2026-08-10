@@ -1,7 +1,16 @@
-const path         = require("path");
-const Batch        = require("../models/Batch");
-const ShipmentItem = require("../models/ShipmentItem");
-const audit        = require("../services/audit.service");
+const path             = require("path");
+const Batch            = require("../models/Batch");
+const ShipmentItem     = require("../models/ShipmentItem");
+const ContainerLoading = require("../models/ContainerLoading");
+const audit            = require("../services/audit.service");
+const {
+  CONTAINER_TO_ITEM_STATUS,
+  MANUAL_ITEM_STATUSES,
+  containerRefMatcher,
+  batchItemFilter,
+  applyBulkStatus,
+  describeBulkResult,
+} = require("../services/logistics.service");
 const {
   DuplicateBatchError,
   BatchRetractionError,
@@ -156,7 +165,7 @@ async function deleteBatch(req, res, next) {
   }
 }
 
-// ─── Update batch (rename / notes) ────────────────────────────────────────────
+// ─── Update batch (rename / notes / bulk status) ──────────────────────────────
 
 async function updateBatch(req, res, next) {
   try {
@@ -167,23 +176,45 @@ async function updateBatch(req, res, next) {
     if (req.body.label !== undefined) updates.label = String(req.body.label).trim() || undefined;
     if (req.body.notes !== undefined) updates.notes = String(req.body.notes).trim() || undefined;
 
-    if (Object.keys(updates).length === 0) {
-      return respond(res, 400, false, "No valid fields provided. Updatable fields: label, notes");
+    // Bulk status — the Goods Received / Arrived equivalent of moving a
+    // container. Applies to every item in this upload, skipping the protected
+    // states (held / delivered / returned / failed).
+    let bulkStatus = null;
+    if (req.body.status !== undefined && String(req.body.status).trim() !== "") {
+      bulkStatus = String(req.body.status).trim();
+      if (!MANUAL_ITEM_STATUSES.includes(bulkStatus)) {
+        return respond(res, 400, false, `Invalid status. Allowed: ${MANUAL_ITEM_STATUSES.join(", ")}`);
+      }
     }
 
-    Object.assign(batch, updates);
-    await batch.save();
+    if (Object.keys(updates).length === 0 && !bulkStatus) {
+      return respond(res, 400, false, "No valid fields provided. Updatable fields: label, notes, status");
+    }
+
+    if (Object.keys(updates).length > 0) {
+      Object.assign(batch, updates);
+      await batch.save();
+    }
+
+    let statusSync = null;
+    if (bulkStatus) {
+      statusSync = await applyBulkStatus(batchItemFilter(batch), bulkStatus, {
+        performedBy: req.user._id,
+        note:        `Bulk status change on upload ${batch.label || batch.batchCode}`,
+      });
+    }
 
     await audit.log({
       performedBy: req.user._id,
-      action:      "BATCH_UPDATED",
+      action:      bulkStatus ? "BATCH_BULK_STATUS" : "BATCH_UPDATED",
       targetModel: "Batch",
       targetId:    batch._id,
-      details:     updates,
+      details:     { ...updates, ...(bulkStatus && { status: bulkStatus, statusSync }) },
       ip:          req.ip,
     });
 
-    return respond(res, 200, true, "Batch updated", batch);
+    const note = describeBulkResult(statusSync);
+    return respond(res, 200, true, note ? `Batch updated — ${note}` : "Batch updated", batch);
   } catch (err) { next(err); }
 }
 
@@ -365,7 +396,10 @@ async function getMyBatchItems(req, res, next) {
       ).catch(() => {});
     }
 
-    const grouped = { in_warehouse: [], shipped: [], customs: [], out_for_delivery: [], delivered: [], held: [] };
+    const grouped = {
+      in_warehouse: [], shipped: [], at_port: [], customs: [],
+      ready_for_pickup: [], out_for_delivery: [], delivered: [], held: [],
+    };
     items.forEach((item) => {
       sanitizePublicItem(item);
       if (grouped[item.status]) grouped[item.status].push(item);
@@ -515,15 +549,11 @@ async function updateItem(req, res, next) {
     // Manual status change — staff can move an item that the automatic
     // waybill matching missed (e.g. from the warehouse onto a container).
     // Recorded in the timeline so the change is visible to customers.
-    const MANUAL_STATUSES = [
-      "in_warehouse", "shipped", "customs",
-      "out_for_delivery", "delivered", "held", "returned", "failed",
-    ];
     let statusChanged = false;
     if (req.body.status !== undefined && String(req.body.status) !== item.status) {
       const newStatus = String(req.body.status);
-      if (!MANUAL_STATUSES.includes(newStatus)) {
-        return respond(res, 400, false, `Invalid status. Allowed: ${MANUAL_STATUSES.join(", ")}`);
+      if (!MANUAL_ITEM_STATUSES.includes(newStatus)) {
+        return respond(res, 400, false, `Invalid status. Allowed: ${MANUAL_ITEM_STATUSES.join(", ")}`);
       }
       item.status = newStatus;
       if (newStatus !== "held") item.heldReason = undefined;
@@ -541,6 +571,39 @@ async function updateItem(req, res, next) {
         res, 400, false,
         `No valid fields provided. Updatable fields: ${ALLOWED_FIELDS.join(", ")}, status`
       );
+    }
+
+    // Attaching an item to a container from the Goods Received tab is the
+    // mirror of moving the container itself: the item inherits the container's
+    // ETA, and — unless staff set a status explicitly in the same edit — the
+    // status the container implies. That is what makes the item appear under
+    // the container on the Container Loadings tab.
+    let linkedContainer = null;
+    if (updates.containerRef !== undefined) {
+      const ref = updates.containerRef ? String(updates.containerRef).trim().toUpperCase() : null;
+      updates.containerRef = ref || null;
+
+      if (ref) {
+        linkedContainer = await ContainerLoading.findOne({ containerNumber: containerRefMatcher(ref) });
+        if (linkedContainer) {
+          if (linkedContainer.eta) updates.estimatedDelivery = linkedContainer.eta;
+
+          const implied = CONTAINER_TO_ITEM_STATUS[linkedContainer.status];
+          if (!statusChanged && implied && implied !== item.status && item.status !== "held") {
+            item.status = implied;
+            item.stageHistory.push({
+              status:    implied,
+              updatedAt: new Date(),
+              updatedBy: req.user._id,
+              note:      `Attached to container ${linkedContainer.containerNumber} (${linkedContainer.status.replace(/_/g, " ")})`,
+            });
+            statusChanged = true;
+          }
+        }
+      } else {
+        // Container cleared — drop the ETA that came with it.
+        updates.estimatedDelivery = null;
+      }
     }
 
     // Re-normalise phone and re-link to User account if phone is being updated
@@ -568,7 +631,10 @@ async function updateItem(req, res, next) {
       ip:          req.ip,
     });
 
-    return respond(res, 200, true, "Item updated", item);
+    const message = linkedContainer
+      ? `Item updated — attached to container ${linkedContainer.containerNumber}`
+      : "Item updated";
+    return respond(res, 200, true, message, item);
   } catch (err) { next(err); }
 }
 

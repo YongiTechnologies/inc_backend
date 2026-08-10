@@ -29,7 +29,8 @@ async function getCustomerStats(req, res, next) {
 
     const totalItems    = items.length;
     const inTransit     = items.filter((item) =>
-      ["pending", "picked_up", "in_transit", "customs", "out_for_delivery", "shipped"].includes(item.status)
+      ["pending", "picked_up", "in_transit", "customs", "out_for_delivery",
+       "shipped", "at_port", "ready_for_pickup"].includes(item.status)
     ).length;
     const delivered     = items.filter((item) => item.status === "delivered").length;
     const inWarehouse   = items.filter((item) => item.status === "in_warehouse").length;
