@@ -26,21 +26,21 @@ const mongoose = require("mongoose");
 
 const ShipmentItem = require("../models/ShipmentItem");
 const { resolveContact, buildCustomerKey } = require("../services/batch.service");
-
-const DB_URI  = process.env.MONGODB_URI;
-const DB_NAME = process.env.DB_NAME || "ghana_logistics";
+// Reuse the app's own connector rather than repeating the URI/dbName defaults.
+// A script that defaulted to a different database name would connect to an
+// empty one and report "0 records" — a silent no-op that looks like success.
+const { connectDB } = require("../config/db");
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const FORCE   = process.argv.includes("--force");
 
 async function main() {
-  if (!DB_URI) {
-    console.error("MONGODB_URI is not set. Aborting.");
-    process.exit(1);
-  }
-
-  await mongoose.connect(DB_URI, { dbName: DB_NAME });
-  console.log(`Connected to ${DB_NAME}${DRY_RUN ? "  (DRY RUN — nothing will be written)" : ""}`);
+  await connectDB();
+  // Print exactly which database is about to be rewritten. This is normally
+  // run against production, so the target should never be a guess.
+  console.log(`host: ${mongoose.connection.host}`);
+  console.log(`database: ${mongoose.connection.name}`);
+  console.log(DRY_RUN ? "DRY RUN — nothing will be written\n" : "APPLYING CHANGES\n");
 
   const filter = FORCE ? {} : { $or: [{ customerKey: null }, { customerKey: { $exists: false } }] };
   const total  = await ShipmentItem.countDocuments(filter);
