@@ -23,6 +23,21 @@
 
 require("dotenv").config();
 const mongoose = require("mongoose");
+const dns      = require("dns");
+
+// A mongodb+srv:// URI needs an SRV lookup, which Node performs through c-ares
+// using dns.getServers() — not the OS resolver that ping and nslookup use. On a
+// machine whose resolver list is a loopback address with nothing listening on
+// it, that fails with "querySrv ECONNREFUSED" while every other name on the
+// system resolves normally. Setting DNS_SERVERS routes the lookup elsewhere
+// without touching the machine's network configuration:
+//
+//   DNS_SERVERS=8.8.8.8,1.1.1.1 npm run backfill-customer-key -- --dry-run
+if (process.env.DNS_SERVERS) {
+  const servers = process.env.DNS_SERVERS.split(",").map((s) => s.trim()).filter(Boolean);
+  dns.setServers(servers);
+  console.log(`DNS servers overridden: ${servers.join(", ")}`);
+}
 
 const ShipmentItem = require("../models/ShipmentItem");
 const { resolveContact, buildCustomerKey } = require("../services/batch.service");
@@ -49,6 +64,11 @@ async function main() {
   const stats = { phone: 0, mark: 0, name: 0, row: 0, markRecovered: 0, unchanged: 0, written: 0 };
   const ops = [];
   let scanned = 0;
+  // Shared tracking numbers are counted from the keys derived during this scan,
+  // not from a query afterwards. On a dry run nothing has been written yet, so
+  // grouping by the stored customerKey would lump every record into one null
+  // group and report zero shared numbers however many there really are.
+  const keysByWaybill = new Map();
 
   const cursor = ShipmentItem.find(filter)
     .select("_id waybillNo customerPhone customerPhoneRaw customerName shippingMark customerKey needsPhone")
@@ -96,6 +116,9 @@ async function main() {
 
     stats[customerKey[0] === "p" ? "phone" : customerKey[0] === "m" ? "mark" : customerKey[0] === "n" ? "name" : "row"]++;
 
+    if (!keysByWaybill.has(doc.waybillNo)) keysByWaybill.set(doc.waybillNo, new Set());
+    keysByWaybill.get(doc.waybillNo).add(customerKey);
+
     if (doc.customerKey === customerKey && doc.needsPhone === set.needsPhone && Object.keys(set).length === 2) {
       stats.unchanged++;
     } else {
@@ -124,15 +147,19 @@ async function main() {
   console.log(`already correct .......... ${stats.unchanged}`);
   console.log(`${DRY_RUN ? "would write" : "written"} .............. ${stats.written}`);
 
-  // Report the shared tracking numbers that motivated all this, so staff can
-  // see which ones now hold more than one customer.
-  const shared = await ShipmentItem.aggregate([
-    { $group: { _id: "$waybillNo", keys: { $addToSet: "$customerKey" } } },
-    { $project: { n: { $size: "$keys" } } },
-    { $match: { n: { $gt: 1 } } },
-    { $count: "total" },
-  ]);
-  console.log(`\ntracking numbers shared by >1 customer: ${shared[0]?.total || 0}`);
+  // The shared tracking numbers that motivated all this — the ones that were
+  // silently collapsing into a single record before.
+  const shared = [...keysByWaybill.entries()].filter(([, keys]) => keys.size > 1);
+  console.log(`\ntracking numbers shared by >1 customer: ${shared.length}`);
+  if (shared.length) {
+    const worst = shared.sort((a, b) => b[1].size - a[1].size).slice(0, 10);
+    console.log("  largest:");
+    for (const [waybill, keys] of worst) {
+      console.log(`    ${waybill.padEnd(20)} ${keys.size} customers`);
+    }
+    const recovered = shared.reduce((sum, [, keys]) => sum + keys.size - 1, 0);
+    console.log(`  ${recovered} record(s) that the old code would have dropped or overwritten`);
+  }
 
   await mongoose.disconnect();
 }

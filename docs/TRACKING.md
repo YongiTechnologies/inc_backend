@@ -165,6 +165,23 @@ npm run backfill-customer-key -- --dry-run   # report only, writes nothing
 npm run backfill-customer-key                # apply
 ```
 
+### If it fails with `querySrv ECONNREFUSED`
+
+A `mongodb+srv://` URI needs an SRV lookup, which Node performs through c-ares
+using its own resolver list — not the OS resolver that `ping` and `nslookup` use.
+If that list points somewhere with nothing listening (check with
+`node -e "console.log(require('dns').getServers())"` — a bare `127.0.0.1` is the
+usual culprit), the lookup is refused before Atlas is ever contacted, even though
+every other name on the machine resolves fine.
+
+The real fix is the machine's DNS settings, since this breaks any Node app
+connecting to Atlas, `npm run dev` included. To get the script through in the
+meantime:
+
+```bash
+DNS_SERVERS=8.8.8.8,1.1.1.1 npm run backfill-customer-key -- --dry-run
+```
+
 It derives each record's identity from what it already holds, recovers shipping
 marks that the old parser discarded, and prints how many live tracking numbers
 turn out to be shared.
