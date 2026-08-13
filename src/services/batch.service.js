@@ -884,6 +884,10 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
         patch.shippingMark    = item.shippingMark;
         patch.shippingMarkRaw = item.shippingMarkRaw;
       }
+      // Records predating composite identity carry a phone but no key, so the
+      // promote block above never fires for them. Setting it here lets a
+      // partially backfilled database heal itself as sheets are re-uploaded.
+      if (!exists.customerKey && item.customerKey) patch.customerKey = item.customerKey;
       if (Object.keys(patch).length) {
         Object.assign(exists, patch); // keep the in-memory copy in step
         await ShipmentItem.updateOne({ _id: exists._id }, { $set: patch });
@@ -995,6 +999,9 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
         found.shippingMark    = item.shippingMark;
         found.shippingMarkRaw = item.shippingMarkRaw;
       }
+      // See processIntakeBatch: pre-existing records carry a phone but no key,
+      // so the promote block above never fires for them.
+      if (!found.customerKey && item.customerKey) found.customerKey = item.customerKey;
 
       found.status              = "shipped";
       found.shippedBatch        = batch._id;
