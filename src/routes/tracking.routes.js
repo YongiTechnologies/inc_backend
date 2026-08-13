@@ -28,13 +28,53 @@ const publicLimiter = rateLimit({
  *           type: string
  *         example: GLC-ABCD1234EF
  *         description: Shipment tracking number (waybill)
+ *       - in: query
+ *         name: phone
+ *         schema: { type: string }
+ *         description: >
+ *           Narrows a shared tracking number to one customer. Any Ghanaian
+ *           format — 0XXXXXXXXX, +233XXXXXXXXX, 233XXXXXXXXX or bare 9-digit.
+ *       - in: query
+ *         name: mark
+ *         schema: { type: string }
+ *         example: "ACC-28672"
+ *         description: >
+ *           Alternative to `phone` for customers recorded by shipping mark
+ *           only. Case and separators are ignored.
  *     responses:
  *       200:
- *         description: Tracking information retrieved
+ *         description: >
+ *           Tracking information retrieved. When several customers share the
+ *           number and neither `phone` nor `mark` was supplied, responds with
+ *           `ambiguous: true` and a list of masked `choices` instead of items.
  *       404:
- *         description: Tracking number not found
+ *         description: Tracking number not found, or identifier matched nothing on it
  */
 router.get("/tracking/:trackingNumber", ctrl.publicTrack);
+
+/**
+ * @swagger
+ * /tracking/mark/{mark}:
+ *   get:
+ *     tags: [Public Tracking]
+ *     summary: Look up all shipments for a shipping mark (public, no login required)
+ *     description: >
+ *       For customers whose sheets carry a shipping mark instead of a phone
+ *       number (e.g. "ACC-28672", "ANGIE"). Case and separators are ignored.
+ *       Rate-limited to 30 req/min.
+ *     parameters:
+ *       - in: path
+ *         name: mark
+ *         required: true
+ *         schema: { type: string }
+ *         example: "ACC-28672"
+ *     responses:
+ *       200:
+ *         description: Items found
+ *       404:
+ *         description: No shipments for this shipping mark
+ */
+router.get("/tracking/mark/:mark", publicLimiter, ctrl.publicTrackByMark);
 
 /**
  * @swagger
@@ -63,17 +103,33 @@ router.get("/tracking/phone/:phone", publicLimiter, ctrl.publicTrackByPhone);
  * /tracking/waybill/{waybill}:
  *   get:
  *     tags: [Public Tracking]
- *     summary: Look up a single item by waybill/job number (public, no login required)
- *     description: Case-insensitive exact match. Rate-limited to 30 req/min.
+ *     summary: Look up items by waybill/job number (public, no login required)
+ *     description: >
+ *       Case-insensitive exact match. Returns every shipment on the waybill —
+ *       a consolidated number legitimately carries several customers' goods.
+ *       Supply `phone` or `mark` to narrow to one customer; without either, a
+ *       shared waybill responds with `ambiguous: true` and masked `choices`.
+ *       Rate-limited to 30 req/min.
  *     parameters:
  *       - in: path
  *         name: waybill
  *         required: true
  *         schema: { type: string }
  *         example: "1C202668306141"
+ *       - in: query
+ *         name: phone
+ *         schema: { type: string }
+ *         description: Narrows a shared waybill to one customer. Any Ghanaian format.
+ *       - in: query
+ *         name: mark
+ *         schema: { type: string }
+ *         example: "ACC-28672"
+ *         description: Alternative to `phone` for mark-only customers.
  *     responses:
  *       200:
- *         description: Item found
+ *         description: Item(s) found, or a masked disambiguation list
+ *       404:
+ *         description: Waybill not found, or identifier matched nothing on it
  */
 router.get("/tracking/waybill/:waybill", publicLimiter, ctrl.publicTrackByWaybill);
 
@@ -130,6 +186,13 @@ router.get("/items/mine", authorize("customer"), ctrl.myItems);
  *       - in: query
  *         name: search
  *         schema: { type: string }
+ *         description: Matches waybill, invoice, description, destination, customer name, shipping mark or phone
+ *       - in: query
+ *         name: needsPhone
+ *         schema: { type: boolean }
+ *         description: >
+ *           `true` lists only items whose upload carried no phone number —
+ *           the worklist for filling those gaps in manually.
  *     responses:
  *       200:
  *         description: Items retrieved

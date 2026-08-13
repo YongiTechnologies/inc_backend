@@ -16,6 +16,94 @@ function normalisePhone(raw) {
   return digits;
 }
 
+/**
+ * Strip a shipping mark down to a comparable key: "TAM-311333", "TAM311333"
+ * and "tam-311333" are the same customer and must collapse to one value.
+ */
+function normaliseMark(raw) {
+  if (raw === null || raw === undefined) return null;
+  const key = String(raw).trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return key || null;
+}
+
+/** The shapes a Ghanaian number arrives in: 233XXXXXXXXX, 0XXXXXXXXX, XXXXXXXXX. */
+function looksLikeGhanaPhone(digits) {
+  return /^233\d{9}$/.test(digits) || /^0\d{9}$/.test(digits) || /^\d{9}$/.test(digits);
+}
+
+/**
+ * One CONTACT cell yields either a phone or a shipping mark.
+ *
+ * Staff write whichever identifier they have into the same column, so a cell
+ * may hold "0244123456", "ACC-28672" or "ANGIE" — and sometimes both at once,
+ * e.g. "0242582198 Priscilla Aboni".
+ *
+ * A cell with no letters is passed to normalisePhone unchanged, so pure-digit
+ * contacts behave exactly as they always have. Only a cell containing letters
+ * takes the branch below: a digit run shaped like a real Ghanaian number still
+ * wins (that keeps the "phone + name in one cell" rows working), and only when
+ * no such run exists is the cell read as a shipping mark. Requiring the full
+ * phone shape rather than a minimum digit count is what stops "ACC-28672" and
+ * "TAM311333" from being mistaken for numbers.
+ *
+ * A cell that yields neither leaves the item without a phone and flags it for
+ * staff rather than inventing an identifier from it.
+ */
+function resolveContact(raw) {
+  const empty = { customerPhone: null, customerPhoneRaw: null, shippingMark: null, shippingMarkRaw: null, needsPhone: true };
+  if (raw === null || raw === undefined) return empty;
+
+  const str = String(raw).trim();
+  if (!str) return empty;
+
+  if (/[A-Za-z]/.test(str)) {
+    const embedded = (str.match(/\d+/g) || []).find(looksLikeGhanaPhone);
+    if (embedded) {
+      return {
+        customerPhone:    normalisePhone(embedded),
+        customerPhoneRaw: str,
+        shippingMark:     null,
+        shippingMarkRaw:  null,
+        needsPhone:       false,
+      };
+    }
+    const mark = normaliseMark(str);
+    return mark
+      ? { customerPhone: null, customerPhoneRaw: str, shippingMark: mark, shippingMarkRaw: str, needsPhone: true }
+      : { ...empty, customerPhoneRaw: str };
+  }
+
+  const phone = normalisePhone(str);
+  return {
+    customerPhone:    phone,
+    customerPhoneRaw: str,
+    shippingMark:     null,
+    shippingMarkRaw:  null,
+    needsPhone:       !phone,
+  };
+}
+
+/**
+ * Identify the customer within a waybill.
+ *
+ * A tracking number is regularly shared by several customers on a consolidated
+ * shipment, so uploads must match on (waybillNo, customerKey) — matching on
+ * waybillNo alone drops the second customer's row or overwrites the first.
+ *
+ * Phone is the strongest signal, then the shipping mark. Name is a weak
+ * fallback: it is blank on most intake sheets and is often an auto-generated
+ * placeholder ("CNEE420" is just the phone's last three digits). The row
+ * fallback never matches another customer, so an unidentifiable row still gets
+ * its own record instead of colliding with someone else's.
+ */
+function buildCustomerKey({ customerPhone, shippingMark, customerName }, rowNo) {
+  if (customerPhone) return `p:${customerPhone}`;
+  if (shippingMark)  return `m:${shippingMark}`;
+  const name = normaliseMark(customerName);
+  if (name) return `n:${name}`;
+  return `r:ROW${rowNo}`;
+}
+
 function parseQuantity(raw) {
   if (raw === null || raw === undefined) return null;
   const str   = String(raw).trim();
@@ -196,7 +284,7 @@ function parseContainerListRows(rows, det) {
   const C = CONTAINER_LIST_COLS;
   const items = [];
   const skippedRows = [];
-  const lastNameByPhone = {};
+  const lastNameByContact = {};
   const containerRef = det.containerNumber || det.batchRef || null;
 
   for (let i = 0; i < rows.length; i++) {
@@ -214,9 +302,22 @@ function parseContainerListRows(rows, det) {
     let cneeStr = row[C.NAME] ? String(row[C.NAME]).trim() : "";
     if (/^\d+(\.\d+)?$/.test(cneeStr)) cneeStr = ""; // numeric "name" = summary artifact
 
-    const phone = normalisePhone(phoneRaw);
-    if (!cneeStr && phone && lastNameByPhone[phone]) cneeStr = lastNameByPhone[phone];
-    else if (cneeStr && phone) lastNameByPhone[phone] = cneeStr;
+    const contact = resolveContact(phoneRaw);
+    // This layout also has a dedicated shipping-mark column, so a mark can come
+    // from there even when the contact cell held a usable phone.
+    const markCell = normaliseMark(row[C.MARK]);
+    if (markCell && !contact.shippingMark) {
+      contact.shippingMark    = markCell;
+      contact.shippingMarkRaw = String(row[C.MARK]).trim();
+    }
+
+    // Staff write the name only on the first row of a customer's group and
+    // leave it blank below, so carry it forward across rows sharing an identity.
+    const contactKey = contact.customerPhone || contact.shippingMark;
+    if (!cneeStr && contactKey && lastNameByContact[contactKey]) cneeStr = lastNameByContact[contactKey];
+    else if (cneeStr && contactKey) lastNameByContact[contactKey] = cneeStr;
+
+    const customerKey = buildCustomerKey({ ...contact, customerName: cneeStr }, i + 1);
 
     const location = row[C.LOCATION] ? String(row[C.LOCATION]).trim().toUpperCase() : null;
     const qtyRaw   = row[C.QTY];
@@ -243,8 +344,8 @@ function parseContainerListRows(rows, det) {
     for (const waybill of waybills) {
       items.push({
         waybillNo:          waybill,
-        customerPhoneRaw:   phoneRaw ? String(phoneRaw).trim() : null,
-        customerPhone:      phone,
+        ...contact,
+        customerKey,
         customerName:       cneeStr || null,
         destinationCity:    location,
         goodsType:          goods,
@@ -414,7 +515,8 @@ function parseUnifiedSheet(buffer) {
       if (!waybillRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
       const waybills = splitWaybills(waybillRaw);
       if (!waybills.length) { skippedRows.push(i + 1); continue; }
-      const phone = normalisePhone(phoneRaw);
+      const contact     = resolveContact(phoneRaw);
+      const customerKey = buildCustomerKey(contact, i + 1);
       const qty   = parseQuantity(qtyRaw);
       const date  = safeDate(dateRaw);
       if (date && !metadata.BATCH_DATE) metadata.BATCH_DATE = date;
@@ -422,8 +524,8 @@ function parseUnifiedSheet(buffer) {
         items.push({
           waybillNo:        waybill,
           invoiceNo:        invoiceRaw ? String(invoiceRaw).trim() : null,
-          customerPhoneRaw: phoneRaw ? String(phoneRaw).trim() : null,
-          customerPhone:    phone,
+          ...contact,
+          customerKey,
           quantity:         qty,
           quantityRaw:      qtyRaw !== null ? String(qtyRaw).trim() : null,
           intakeDate:       date,
@@ -436,7 +538,7 @@ function parseUnifiedSheet(buffer) {
       return idx !== undefined ? row[idx] : null;
     };
 
-    const lastNameByPhone = {}; // carry forward name across rows sharing the same phone
+    const lastNameByContact = {}; // carry forward name across a customer's rows
 
     for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const row = rows[i];
@@ -455,14 +557,18 @@ function parseUnifiedSheet(buffer) {
       // Skip totals / summary rows where the name column is purely numeric
       if (/^\d+(\.\d+)?$/.test(cneeStr)) { skippedRows.push(i + 1); continue; }
 
-      // When the name cell is blank but a prior row for the same phone had a name,
-      // carry that name forward (matches how staff fill in Excel sheets).
-      const phone = normalisePhone(phoneRaw);
-      if (!cneeStr && phone && lastNameByPhone[phone]) {
-        cneeStr = lastNameByPhone[phone];
-      } else if (cneeStr && phone) {
-        lastNameByPhone[phone] = cneeStr;
+      // When the name cell is blank but a prior row for the same customer had a
+      // name, carry that name forward (matches how staff fill in Excel sheets —
+      // the loading-list template says so explicitly).
+      const contact    = resolveContact(phoneRaw);
+      const contactKey = contact.customerPhone || contact.shippingMark;
+      if (!cneeStr && contactKey && lastNameByContact[contactKey]) {
+        cneeStr = lastNameByContact[contactKey];
+      } else if (cneeStr && contactKey) {
+        lastNameByContact[contactKey] = cneeStr;
       }
+
+      const customerKey = buildCustomerKey({ ...contact, customerName: cneeStr }, i + 1);
 
       const location   = get(row, "LOCATION")   ? String(get(row, "LOCATION")).trim().toUpperCase() : null;
       const descRaw    = get(row, "PRODUCT_DESC");
@@ -502,8 +608,8 @@ function parseUnifiedSheet(buffer) {
       for (const waybill of waybills) {
         const item = {
           waybillNo:          waybill,
-          customerPhoneRaw:   phoneRaw ? String(phoneRaw).trim() : null,
-          customerPhone:      phone,
+          ...contact,
+          customerKey,
           customerName:       cneeStr || null,
           destinationCity:    location,
           goodsType,
@@ -606,22 +712,35 @@ async function processArrivedBatch(parsedData, uploadedBy) {
   // Match solely by TRACKING_NO from items[] — no container-based fallback
   // (fallback was removed because it fires when sheets are misaligned and
   // marks unrelated items as arrived).
-  for (const item of items) {
-    const found = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
-    if (!found) { newItems++; continue; }
+  //
+  // An arrival sheet has no contact column, so it cannot name which customer on
+  // a shared waybill arrived. It does not need to: every customer sharing a
+  // consolidated tracking number is on the same container and lands together,
+  // so all records for the waybill advance as one.
+  const arrivedWaybills = [...new Set(items.map((i) => i.waybillNo))];
 
-    found.status       = "customs";
-    found.arrivedBatch = batch._id;
-    if (arrivalDate) found.arrivalDate = arrivalDate;
-    found.stageHistory.push({
-      stage:     "arrived",
-      status:    "customs",
-      batchId:   batch._id,
-      updatedAt: new Date(),
-      note:      `Arrived at Ghana port via ${batchCode}`,
-    });
-    await found.save();
-    matchedItems++;
+  for (const waybillNo of arrivedWaybills) {
+    const res = await ShipmentItem.updateMany(
+      { waybillNo },
+      {
+        $set: {
+          status:       "customs",
+          arrivedBatch: batch._id,
+          ...(arrivalDate ? { arrivalDate } : {}),
+        },
+        $push: {
+          stageHistory: {
+            stage:     "arrived",
+            status:    "customs",
+            batchId:   batch._id,
+            updatedAt: new Date(),
+            note:      `Arrived at Ghana port via ${batchCode}`,
+          },
+        },
+      }
+    );
+    if (res.matchedCount === 0) newItems++;
+    else matchedItems += res.matchedCount;
   }
 
   if (containerNumber) {
@@ -645,6 +764,69 @@ async function processArrivedBatch(parsedData, uploadedBy) {
     skippedRows,
     summary:    `${totalItems} items marked as arrived (customs). Container: ${containerNumber || "N/A"}.`,
   };
+}
+
+/**
+ * Load every existing record for the waybills in this sheet, grouped by waybill.
+ *
+ * Done once per upload rather than per row: matching now consults several
+ * fields, and a 1,000-row packing list would otherwise issue thousands of
+ * round-trips.
+ */
+async function loadExistingByWaybill(items) {
+  const waybills = [...new Set(items.map((i) => i.waybillNo).filter(Boolean))];
+  if (!waybills.length) return new Map();
+
+  const docs = await ShipmentItem.find({ waybillNo: { $in: waybills } });
+  const map  = new Map();
+  for (const doc of docs || []) {
+    if (!map.has(doc.waybillNo)) map.set(doc.waybillNo, []);
+    map.get(doc.waybillNo).push(doc);
+  }
+  return map;
+}
+
+/**
+ * Find the record a parsed row belongs to, without merging two customers who
+ * happen to share a tracking number.
+ *
+ * The exact (waybillNo, customerKey) pair is the normal path. The fallbacks
+ * exist because a customer can be recorded under one identifier at intake and
+ * the other on the packing list — a mark on one sheet, a phone on the next —
+ * which would otherwise create a second record for the same parcel.
+ */
+function matchExistingItem(item, existingByWaybill) {
+  const candidates = existingByWaybill.get(item.waybillNo) || [];
+  if (!candidates.length) return null;
+
+  const exact = candidates.find((c) => c.customerKey === item.customerKey);
+  if (exact) return exact;
+
+  // Same customer recorded under their other identifier.
+  const alt = candidates.find(
+    (c) =>
+      (item.shippingMark  && c.shippingMark  === item.shippingMark) ||
+      (item.customerPhone && c.customerPhone === item.customerPhone)
+  );
+  if (alt) return alt;
+
+  // A single record on this waybill still waiting for a phone is almost
+  // certainly this row, now that a phone has arrived. Restricted to waybills
+  // holding exactly one record — on a shared waybill there is no way to tell
+  // which customer is which, and guessing would recreate the very bug this
+  // matching exists to prevent.
+  if (item.customerPhone && candidates.length === 1 && candidates[0].needsPhone) {
+    return candidates[0];
+  }
+
+  return null;
+}
+
+/** Register a freshly created record so later rows in the same sheet match it. */
+function rememberCreated(existingByWaybill, doc) {
+  if (!doc || !doc.waybillNo) return;
+  if (!existingByWaybill.has(doc.waybillNo)) existingByWaybill.set(doc.waybillNo, []);
+  existingByWaybill.get(doc.waybillNo).push(doc);
 }
 
 // ─── Custom error for duplicate batch uploads ─────────────────────────────────
@@ -679,21 +861,39 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
   let newItems     = 0;
   let matchedItems = 0;
 
+  const existingByWaybill = await loadExistingByWaybill(items);
+
   for (const item of items) {
-    const exists = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
+    // Matched on (waybillNo, customerKey), never waybillNo alone — several
+    // customers routinely share one tracking number, and matching on the number
+    // by itself silently discarded every row after the first.
+    const exists = matchExistingItem(item, existingByWaybill);
     if (exists) {
       // Patch missing fields that may have been blank on the original upload
       // (e.g. invoiceNo when the column alias was not yet recognised).
       const patch = {};
       if (!exists.invoiceNo    && item.invoiceNo)    patch.invoiceNo    = item.invoiceNo;
       if (!exists.customerName && item.customerName) patch.customerName = item.customerName;
-      if (Object.keys(patch).length) await ShipmentItem.updateOne({ _id: exists._id }, { $set: patch });
+      if (!exists.customerPhone && item.customerPhone) {
+        patch.customerPhone    = item.customerPhone;
+        patch.customerPhoneRaw = item.customerPhoneRaw;
+        patch.customerKey      = item.customerKey;
+        patch.needsPhone       = false;
+      }
+      if (!exists.shippingMark && item.shippingMark) {
+        patch.shippingMark    = item.shippingMark;
+        patch.shippingMarkRaw = item.shippingMarkRaw;
+      }
+      if (Object.keys(patch).length) {
+        Object.assign(exists, patch); // keep the in-memory copy in step
+        await ShipmentItem.updateOne({ _id: exists._id }, { $set: patch });
+      }
       matchedItems++;
       continue;
     }
 
     const customerId = await findUserByPhone(item.customerPhone);
-    await ShipmentItem.create({
+    const created = await ShipmentItem.create({
       ...item,
       customerId,
       status:       "in_warehouse",
@@ -706,6 +906,9 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
         note:      "Created via intake upload",
       }],
     });
+    // So a repeated (waybill, customer) row later in the same sheet matches
+    // this record instead of inserting a second copy of it.
+    rememberCreated(existingByWaybill, created || item);
     newItems++;
   }
 
@@ -769,12 +972,29 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
   // list inherits it unless the row had its own expected-delivery date.
   const etaDate = safeDate(eta);
 
+  const existingByWaybill = await loadExistingByWaybill(items);
+
   for (const item of items) {
     const customerId = await findUserByPhone(item.customerPhone);
-    const found      = await ShipmentItem.findOne({ waybillNo: item.waybillNo });
+    // Keyed on the customer as well as the waybill — matching on the waybill
+    // alone overwrote the first customer's record with the second's data.
+    const found      = matchExistingItem(item, existingByWaybill);
 
     if (found) {
       if (found.status === "shipped") { matchedItems++; continue; }
+
+      // A row matched through the fallbacks may carry the identifier the
+      // existing record lacks — promote it so later uploads match exactly.
+      if (!found.customerPhone && item.customerPhone) {
+        found.customerPhone    = item.customerPhone;
+        found.customerPhoneRaw = item.customerPhoneRaw;
+        found.customerKey      = item.customerKey;
+        found.needsPhone       = false;
+      }
+      if (!found.shippingMark && item.shippingMark) {
+        found.shippingMark    = item.shippingMark;
+        found.shippingMarkRaw = item.shippingMarkRaw;
+      }
 
       found.status              = "shipped";
       found.shippedBatch        = batch._id;
@@ -806,7 +1026,7 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
       await found.save();
       matchedItems++;
     } else {
-      await ShipmentItem.create({
+      const created = await ShipmentItem.create({
         ...item,
         estimatedDelivery: item.estimatedDelivery || etaDate,
         customerId,
@@ -820,6 +1040,9 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
           note:      `Created directly via packing list ${batchCode}`,
         }],
       });
+      // So a repeated (waybill, customer) row later in the same sheet matches
+      // this record instead of inserting a second copy of it.
+      rememberCreated(existingByWaybill, created || { ...item, status: "shipped" });
       newItems++;
     }
   }
@@ -834,7 +1057,9 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
     const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
     const recentBatchIds = recentBatches.map((b) => b._id);
-    const uploadedPhones = new Set(items.map((i) => i.customerPhone).filter(Boolean));
+    // Keyed rather than phoned, so a customer present on the list under a
+    // shipping mark is recognised and left alone like any other.
+    const uploadedKeys = new Set(items.map((i) => i.customerKey).filter(Boolean));
 
     const heldResult = await ShipmentItem.updateMany(
       {
@@ -842,8 +1067,8 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
         intakeBatch: { $in: recentBatchIds },
         waybillNo:   { $nin: Array.from(uploadedWaybills) },
         $or: [
-          { customerPhone: null },
-          { customerPhone: { $nin: Array.from(uploadedPhones) } },
+          { customerKey: null },
+          { customerKey: { $nin: Array.from(uploadedKeys) } },
         ],
       },
       {
@@ -1081,26 +1306,38 @@ async function validateBatch(buffer, options = {}) {
 
   const waybills = [...new Set(items.map((i) => i.waybillNo).filter(Boolean))];
 
-  const existingItems = await ShipmentItem.find({ waybillNo: { $in: waybills } })
-    .select("waybillNo status")
-    .lean();
-  const existingSet = new Set(existingItems.map((i) => i.waybillNo));
+  // Counted per (waybill, customer) pair — one tracking number shared by three
+  // customers is three records, and counting waybills alone under-reported it.
+  const pairKey = (i) => `${i.waybillNo}|${i.customerKey}`;
+  const pairs   = [...new Set(items.filter((i) => i.waybillNo).map(pairKey))];
 
-  const willCreate = waybills.filter((w) => !existingSet.has(w)).length;
-  const willUpdate = waybills.filter((w) => existingSet.has(w)).length;
+  const existingItems = await ShipmentItem.find({ waybillNo: { $in: waybills } })
+    .select("waybillNo customerKey status")
+    .lean();
+  const existingSet = new Set(existingItems.map(pairKey));
+
+  const willCreate = pairs.filter((p) => !existingSet.has(p)).length;
+  const willUpdate = pairs.filter((p) => existingSet.has(p)).length;
+
+  // Rows whose CONTACT column yielded no phone — staff can fill these in.
+  const needsPhone = items.filter((i) => i.needsPhone).length;
+  // Tracking numbers this sheet itself shares between customers.
+  const sharedWaybills = waybills.filter(
+    (w) => new Set(items.filter((i) => i.waybillNo === w).map((i) => i.customerKey)).size > 1
+  ).length;
 
   let willHold = 0;
   if (stage === "shipped" && autoHold) {
-    const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id").lean();
-    const uploadedPhones = [...new Set(items.map((i) => i.customerPhone).filter(Boolean))];
+    const cutoff        = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const recentBatches = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id").lean();
+    const uploadedKeys  = [...new Set(items.map((i) => i.customerKey).filter(Boolean))];
     willHold = await ShipmentItem.countDocuments({
       status:      "in_warehouse",
       intakeBatch: { $in: recentBatches.map((b) => b._id) },
       waybillNo:   { $nin: waybills },
       $or: [
-        { customerPhone: null },
-        { customerPhone: { $nin: uploadedPhones } },
+        { customerKey: null },
+        { customerKey: { $nin: uploadedKeys } },
       ],
     });
   }
@@ -1109,6 +1346,7 @@ async function validateBatch(buffer, options = {}) {
     waybillNo:    item.waybillNo,
     customerName: item.customerName,
     customerPhone: item.customerPhoneRaw,
+    shippingMark: item.shippingMarkRaw || null,
     cbm:          item.cbm,
     qty:          item.quantity,
     destination:  item.destinationCity,
@@ -1123,6 +1361,8 @@ async function validateBatch(buffer, options = {}) {
     willCreate,
     willUpdate,
     willHold,
+    needsPhone,
+    sharedWaybills,
     totalRows:   items.length,
     skippedRows: skippedRows.length,
   };
@@ -1147,23 +1387,109 @@ function sanitizePublicItem(item) {
   return item;
 }
 
-async function lookupByPhone(normalised) {
-  const items = await ShipmentItem.find({ customerPhone: normalised })
+/** "KUDAMO MARIAMA" → "K••••• M••••••" — enough to recognise your own name. */
+function maskName(name) {
+  if (!name) return null;
+  return String(name)
+    .split(/\s+/)
+    .map((w) => (w.length <= 1 ? w : w[0] + "•".repeat(Math.min(w.length - 1, 6))))
+    .join(" ");
+}
+
+/** "233244123456" → "0244•••456" — enough to recognise your own number. */
+function maskPhone(phone) {
+  if (!phone) return null;
+  const local = String(phone).startsWith("233") ? "0" + String(phone).slice(3) : String(phone);
+  if (local.length <= 5) return "•".repeat(local.length);
+  return local.slice(0, 4) + "•".repeat(Math.max(local.length - 7, 1)) + local.slice(-3);
+}
+
+/** "ACC28672" → "ACC•••72". */
+function maskMark(mark) {
+  if (!mark) return null;
+  const s = String(mark);
+  if (s.length <= 3) return s;
+  return s.slice(0, 3) + "•".repeat(Math.max(s.length - 5, 1)) + s.slice(-2);
+}
+
+/**
+ * A shared tracking number belongs to several customers, so a bare number is
+ * not proof of ownership. This is all a caller gets until they name which of
+ * them they are — enough to spot your own entry, not enough to learn a
+ * stranger's details.
+ */
+function toDisambiguationChoice(item) {
+  return {
+    customerName: maskName(item.customerName),
+    customerPhone: maskPhone(item.customerPhone),
+    shippingMark: maskMark(item.shippingMark),
+    destinationCity: item.destinationCity || null,
+    status: item.status,
+  };
+}
+
+const publicQuery = (filter) =>
+  ShipmentItem.find(filter)
     .sort({ updatedAt: -1 })
     .select(PUBLIC_LOOKUP_SELECT)
     .populate("intakeBatch",  "batchCode stage createdAt")
     .populate("shippedBatch", "batchCode stage createdAt")
     .lean();
+
+async function lookupByPhone(normalised) {
+  const items = await publicQuery({ customerPhone: normalised });
   return items.map(sanitizePublicItem);
 }
 
-async function lookupByWaybill(waybill) {
-  const item = await ShipmentItem.findOne({ waybillNo: waybill })
-    .select(PUBLIC_LOOKUP_SELECT)
-    .populate("intakeBatch",  "batchCode stage createdAt")
-    .populate("shippedBatch", "batchCode stage createdAt")
-    .lean();
-  return sanitizePublicItem(item);
+/**
+ * Look up every shipment on a mark. Customers whose sheets carried no phone are
+ * identified only by this, so it is their sole route into the tracker.
+ */
+async function lookupByMark(mark) {
+  const normalised = normaliseMark(mark);
+  if (!normalised) return [];
+  const items = await publicQuery({ shippingMark: normalised });
+  return items.map(sanitizePublicItem);
+}
+
+/**
+ * Look up a tracking number, optionally narrowed to one customer.
+ *
+ * Returns every record on the number rather than an arbitrary one, because a
+ * consolidated number legitimately carries several customers' goods. When more
+ * than one matches and the caller has not identified themselves, the items are
+ * withheld and masked choices are returned instead.
+ *
+ * @returns {{ items: object[], ambiguous: boolean, choices: object[], total: number }}
+ */
+async function lookupByWaybill(waybill, { phone, mark } = {}) {
+  const all = await publicQuery({ waybillNo: waybill });
+  if (!all.length) return { items: [], ambiguous: false, choices: [], total: 0 };
+
+  const narrowed = [];
+  const wantPhone = phone ? normalisePhone(phone) : null;
+  const wantMark  = mark  ? normaliseMark(mark)   : null;
+
+  if (wantPhone || wantMark) {
+    for (const item of all) {
+      if (wantPhone && item.customerPhone === wantPhone) narrowed.push(item);
+      else if (wantMark && item.shippingMark === wantMark) narrowed.push(item);
+    }
+    // An identifier that matches nothing on this number is a failed lookup, not
+    // a reason to fall back to showing everybody.
+    return { items: narrowed.map(sanitizePublicItem), ambiguous: false, choices: [], total: all.length };
+  }
+
+  if (all.length === 1) {
+    return { items: [sanitizePublicItem(all[0])], ambiguous: false, choices: [], total: 1 };
+  }
+
+  return {
+    items:     [],
+    ambiguous: true,
+    choices:   all.map(toDisambiguationChoice),
+    total:     all.length,
+  };
 }
 
 module.exports = {
@@ -1179,8 +1505,16 @@ module.exports = {
   processArrivedBatch,
   validateBatch,
   normalisePhone,
+  normaliseMark,
+  resolveContact,
+  buildCustomerKey,
+  matchExistingItem,
   lookupByPhone,
+  lookupByMark,
   lookupByWaybill,
   sanitizePublicItem,
+  maskName,
+  maskPhone,
+  maskMark,
   PRE_LOADING_STATUSES,
 };

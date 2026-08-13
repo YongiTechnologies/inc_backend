@@ -20,6 +20,8 @@ const mockBatchFindByIdUpdate = jest.fn();
 const mockBatchFindById       = jest.fn();
 const mockItemCreate          = jest.fn();
 const mockItemFindOne         = jest.fn();
+const mockItemFind            = jest.fn();
+const mockItemUpdateOne       = jest.fn();
 const mockItemUpdateMany      = jest.fn();
 const mockUserFindOne         = jest.fn();
 const mockContainerUpdate     = jest.fn();
@@ -32,11 +34,24 @@ jest.mock("../src/models/Batch", () => ({
   findById:         (...a) => mockBatchFindById(...a),
 }));
 
+// find() is awaited directly by loadExistingByWaybill (prefetching a whole
+// upload's existing records) and chained as .select().lean() elsewhere, so the
+// double has to support both shapes.
+function mockItemFindResult() {
+  const rows = mockItemFind();
+  const list = Array.isArray(rows) ? rows : [];
+  return Object.assign(Promise.resolve(list), {
+    select: () => ({ lean: () => Promise.resolve(list) }),
+    lean:   () => Promise.resolve(list),
+  });
+}
+
 jest.mock("../src/models/ShipmentItem", () => ({
   create:         (...a) => mockItemCreate(...a),
   findOne:        (...a) => mockItemFindOne(...a),
+  updateOne:      (...a) => mockItemUpdateOne(...a),
   updateMany:     (...a) => mockItemUpdateMany(...a),
-  find:           () => ({ select: () => ({ lean: () => Promise.resolve([]) }) }),
+  find:           () => mockItemFindResult(),
   countDocuments: () => Promise.resolve(0),
 }));
 
@@ -270,7 +285,9 @@ describe("Status transition: in_warehouse → shipped when TRACKING N0. matches"
     mockBatchFindByIdUpdate.mockResolvedValue(null);
     mockBatchFindById.mockResolvedValue({ _id: "batch001", batchCode: "INTAKE-2025-04-01" });
     mockItemCreate.mockResolvedValue({});
+    mockItemUpdateOne.mockResolvedValue({ modifiedCount: 0 });
     mockItemUpdateMany.mockResolvedValue({ modifiedCount: 0 });
+    mockItemFind.mockReturnValue([]);
     mockUserFindOne.mockReturnValue({ select: () => Promise.resolve(null) });
   });
 
@@ -278,8 +295,8 @@ describe("Status transition: in_warehouse → shipped when TRACKING N0. matches"
     const intakeBuf = loadFixture("../docs/excel-templates/intake-template.xlsx");
     const intakeParsed = parseIntakeSheet(intakeBuf);
 
-    // Simulate processIntakeBatch — item "301977756976" is already in DB
-    mockItemFindOne.mockResolvedValue(null); // new item for intake
+    // Simulate processIntakeBatch — nothing in the DB yet
+    mockItemFind.mockReturnValue([]);
     await processIntakeBatch(intakeParsed, "user001", "intake-template.xlsx");
     expect(mockItemCreate).toHaveBeenCalled();
 
@@ -287,14 +304,18 @@ describe("Status transition: in_warehouse → shipped when TRACKING N0. matches"
     const loadingBuf    = loadFixture("../docs/excel-templates/loading-template.xlsx");
     const loadingParsed = parseShippedSheet(loadingBuf);
 
-    // Mock: item exists with status=in_warehouse
+    // Mock: item exists with status=in_warehouse. Uploads now prefetch existing
+    // records for the whole sheet via find(), and match on (waybill, customer).
+    const shippedRow = loadingParsed.items.find((i) => i.waybillNo === "301977756976");
     const fakeItem = {
       waybillNo:    "301977756976",
+      customerKey:  shippedRow.customerKey,
+      customerPhone: shippedRow.customerPhone,
       status:       "in_warehouse",
       stageHistory: [],
       save:         jest.fn().mockResolvedValue(true),
     };
-    mockItemFindOne.mockResolvedValue(fakeItem);
+    mockItemFind.mockReturnValue([fakeItem]);
 
     await processShippedBatch(loadingParsed, "user001");
 
@@ -513,7 +534,7 @@ describe("DuplicateBatchError carries batchId for replace-and-retry", () => {
 describe("processShippedBatch auto-hold is opt-in", () => {
   const parsed = {
     metadata: { CONTAINER_NUMBER: "CTRTEST01", BATCH_REF: "N777" },
-    items:    [{ waybillNo: "WBHOLD1", customerPhone: "233200000001" }],
+    items:    [{ waybillNo: "WBHOLD1", customerPhone: "233200000001", customerKey: "p:233200000001" }],
     skippedRows: [],
   };
 
@@ -524,7 +545,7 @@ describe("processShippedBatch auto-hold is opt-in", () => {
     mockBatchCreate.mockImplementation((doc) => Promise.resolve({ _id: "batchHold", ...doc }));
     mockBatchFindByIdUpdate.mockResolvedValue(null);
     mockBatchFindById.mockResolvedValue({ _id: "batchHold", batchCode: "PKL-N777" });
-    mockItemFindOne.mockResolvedValue(null); // new item, no match
+    mockItemFind.mockReturnValue([]); // nothing on this waybill yet
     mockItemCreate.mockResolvedValue({});
     mockItemUpdateMany.mockResolvedValue({ modifiedCount: 5 });
     mockUserFindOne.mockReturnValue({ select: () => Promise.resolve(null) });
@@ -542,9 +563,10 @@ describe("processShippedBatch auto-hold is opt-in", () => {
     expect(mockItemUpdateMany).toHaveBeenCalledTimes(1);
     const [query] = mockItemUpdateMany.mock.calls[0];
     expect(query.status).toBe("in_warehouse");
-    // Smarter matching: excludes items whose phone is on the list
+    // Excludes anyone already on the list by customerKey, so a customer present
+    // under a shipping mark rather than a phone is recognised and left alone.
     expect(query.$or).toEqual(
-      expect.arrayContaining([{ customerPhone: expect.anything() }])
+      expect.arrayContaining([{ customerKey: expect.anything() }])
     );
   });
 });

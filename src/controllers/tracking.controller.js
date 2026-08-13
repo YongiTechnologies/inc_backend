@@ -4,11 +4,45 @@ const audit = require("../services/audit.service");
 const { respond } = require("../utils/response");
 
 // PUBLIC — no auth
+//
+// A tracking number shared by several customers cannot be resolved from the
+// number alone, so `phone` / `mark` narrow it to one of them. Without either,
+// a shared number returns masked choices (ambiguous: true) rather than
+// whichever record the database happened to return first.
 async function publicTrack(req, res, next) {
   try {
-    const data = await trackingService.getTrackingByNumber(req.params.trackingNumber.toUpperCase());
-    if (!data) return respond(res, 404, false, "Tracking number not found. Please check and try again.");
-    return respond(res, 200, true, "Tracking info retrieved", data);
+    const { phone, mark } = req.query;
+    const result = await trackingService.getTrackingByNumber(
+      req.params.trackingNumber.toUpperCase(),
+      { phone, mark },
+    );
+
+    if (result.total === 0) {
+      return respond(res, 404, false, "Tracking number not found. Please check and try again.");
+    }
+
+    // 200, not 3xx — axios rejects anything outside 2xx by default, so a status
+    // code here would surface a normal disambiguation prompt as a request error.
+    if (result.ambiguous) {
+      return respond(res, 200, true,
+        `This tracking number covers ${result.total} shipments. Enter your phone number or shipping mark to see yours.`,
+        { ambiguous: true, total: result.total, choices: result.choices, items: [] },
+      );
+    }
+
+    if (!result.items.length) {
+      return respond(res, 404, false,
+        "That phone number or shipping mark does not match any shipment on this tracking number.");
+    }
+
+    // Single-customer numbers keep the original flat shape so existing callers
+    // are unaffected; `items` carries the full set for shared numbers.
+    return respond(res, 200, true, "Tracking info retrieved", {
+      ...result.items[0],
+      items: result.items,
+      total: result.total,
+      ambiguous: false,
+    });
   } catch (err) { next(err); }
 }
 
@@ -41,10 +75,42 @@ async function publicTrackByPhone(req, res, next) {
 async function publicTrackByWaybill(req, res, next) {
   try {
     const waybill = req.params.waybill.trim().toUpperCase();
-    const item = await batchService.lookupByWaybill(waybill);
+    const { phone, mark } = req.query;
+    const result = await batchService.lookupByWaybill(waybill, { phone, mark });
 
-    if (!item) return respond(res, 404, false, "Waybill not found");
-    return respond(res, 200, true, "Item retrieved", item);
+    if (result.total === 0) return respond(res, 404, false, "Waybill not found");
+
+    if (result.ambiguous) {
+      return respond(res, 200, true,
+        `This waybill covers ${result.total} shipments. Enter your phone number or shipping mark to see yours.`,
+        { ambiguous: true, total: result.total, choices: result.choices, items: [] },
+      );
+    }
+
+    if (!result.items.length) {
+      return respond(res, 404, false,
+        "That phone number or shipping mark does not match any shipment on this waybill.");
+    }
+
+    // Flat shape preserved for the single-customer case that callers expect.
+    return respond(res, 200, true, "Item retrieved", {
+      ...result.items[0],
+      items: result.items,
+      total: result.total,
+      ambiguous: false,
+    });
+  } catch (err) { next(err); }
+}
+
+/**
+ * Public lookup by shipping mark. Customers whose sheets carried no phone are
+ * identified only by their mark, so without this they have no way in.
+ */
+async function publicTrackByMark(req, res, next) {
+  try {
+    const items = await batchService.lookupByMark(req.params.mark);
+    if (!items.length) return respond(res, 404, false, "No shipments found for this shipping mark");
+    return respond(res, 200, true, "Shipments retrieved", { total: items.length, items });
   } catch (err) { next(err); }
 }
 
@@ -92,12 +158,13 @@ async function updateItemStatus(req, res, next) {
 // EMPLOYEE/ADMIN — list items
 async function listItems(req, res, next) {
   try {
-    const { page = 1, limit = 20, status, search } = req.query;
+    const { page = 1, limit = 20, status, search, needsPhone } = req.query;
     const result = await trackingService.listShipmentItems({
       page:   parseInt(page),
       limit:  Math.min(parseInt(limit), 100),
       status,
       search,
+      needsPhone: needsPhone === undefined ? undefined : needsPhone === "true",
     });
     return respond(res, 200, true, "Shipment items retrieved", result);
   } catch (err) { next(err); }
@@ -170,6 +237,7 @@ module.exports = {
   publicTrack,
   publicTrackByPhone,
   publicTrackByWaybill,
+  publicTrackByMark,
   internalTrack,
   updateItemStatus,
   listItems,

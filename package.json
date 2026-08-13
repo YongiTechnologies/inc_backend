@@ -9,6 +9,7 @@
     "test": "jest --testEnvironment=node --runInBand",
     "seed": "node src/scripts/seed.js",
     "migrate-shipments": "node src/scripts/migrate-shipments-to-items.js",
+    "backfill-customer-key": "node src/scripts/backfill-customer-key.js",
     "create-admin": "node src/scripts/create-admin.js"
   },
   "dependencies": {

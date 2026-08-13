@@ -1,6 +1,9 @@
 const ShipmentItem = require("../models/ShipmentItem");
 const User = require("../models/User");
 const emailService = require("./email.service");
+// Identifier normalising and masking live with the sheet parser that produces
+// them; batch.service does not require this module, so there is no cycle.
+const batchService = require("./batch.service");
 const { escapeRegex } = require("../utils/validators");
 
 /**
@@ -57,17 +60,59 @@ const STATUS_LABELS = {
 
 /**
  * Public tracker — no auth required.
- * Returns ShipmentItem by waybill number.
  * Strips internal notes before returning.
+ *
+ * A tracking number can be shared by several customers on a consolidated
+ * shipment, so this returns every record on the number. Pass a phone or
+ * shipping mark to narrow it to one customer; without one, a shared number
+ * yields masked choices instead of another customer's details.
+ *
+ * @returns {{ items: object[], ambiguous: boolean, choices: object[], total: number }}
  */
-async function getTrackingByNumber(waybillNo) {
-  const item = await ShipmentItem.findOne({ waybillNo: waybillNo.toUpperCase() })
+async function getTrackingByNumber(waybillNo, { phone, mark } = {}) {
+  const all = await ShipmentItem.find({ waybillNo: waybillNo.toUpperCase() })
+    .sort({ updatedAt: -1 })
     .populate("customerId", "name")
     .lean();
 
-  if (!item) return null;
+  if (!all.length) return { items: [], ambiguous: false, choices: [], total: 0 };
 
-  return buildItemResponse(item, { includeInternal: false });
+  const wantPhone = phone ? batchService.normalisePhone(phone) : null;
+  const wantMark  = mark  ? batchService.normaliseMark(mark)   : null;
+
+  if (wantPhone || wantMark) {
+    const narrowed = all.filter(
+      (i) => (wantPhone && i.customerPhone === wantPhone) || (wantMark && i.shippingMark === wantMark)
+    );
+    return {
+      items:     narrowed.map((i) => buildItemResponse(i, { includeInternal: false })),
+      ambiguous: false,
+      choices:   [],
+      total:     all.length,
+    };
+  }
+
+  if (all.length === 1) {
+    return {
+      items:     [buildItemResponse(all[0], { includeInternal: false })],
+      ambiguous: false,
+      choices:   [],
+      total:     1,
+    };
+  }
+
+  return {
+    items:     [],
+    ambiguous: true,
+    choices:   all.map((i) => ({
+      customerName:    batchService.maskName(i.customerName),
+      customerPhone:   batchService.maskPhone(i.customerPhone),
+      shippingMark:    batchService.maskMark(i.shippingMark),
+      destinationCity: i.destinationCity || null,
+      status:          i.status,
+    })),
+    total:     all.length,
+  };
 }
 
 /**
@@ -205,10 +250,12 @@ async function updateShipmentItem(id, data) {
  * (staffNotes, heldReason, stageHistory internals) and hides container number
  * and ETA for items not yet loaded on a container.
  */
-async function listShipmentItems({ page = 1, limit = 20, status, search, customerId, publicView = false } = {}) {
+async function listShipmentItems({ page = 1, limit = 20, status, search, customerId, needsPhone, publicView = false } = {}) {
   const filter = {};
   if (status)     filter.status = status;
   if (customerId) filter.customerId = customerId;
+  // Staff worklist: rows whose sheet carried no phone number.
+  if (needsPhone !== undefined) filter.needsPhone = needsPhone;
   if (search) {
     const escaped = escapeRegex(search);
     filter.$or = [
@@ -217,6 +264,8 @@ async function listShipmentItems({ page = 1, limit = 20, status, search, custome
       { productDescription:  new RegExp(escaped, "i") },
       { destinationCity:     new RegExp(escaped, "i") },
       { customerName:        new RegExp(escaped, "i") },
+      { shippingMark:        new RegExp(escaped, "i") },
+      { customerPhone:       new RegExp(escaped, "i") },
     ];
   }
 
@@ -345,6 +394,8 @@ function buildItemResponse(item, options = {}) {
     customerName:        item.customerName || null,
     customerPhone:       item.customerPhone || null,
     customerPhoneRaw:    item.customerPhoneRaw || null,
+    shippingMark:        item.shippingMark || null,
+    shippingMarkRaw:     item.shippingMarkRaw || null,
     status: {
       code:      item.status,
       label:     STATUS_LABELS[item.status],

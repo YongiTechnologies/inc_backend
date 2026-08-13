@@ -39,6 +39,23 @@ const shipmentItemSchema = new mongoose.Schema(
     customerId:       { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     customerName:     { type: String },              // CNEE NAME from packing list
 
+    // Shipping mark — the customer's identifier on sheets that carry no phone
+    // (e.g. "ACC-28672", "ANGIE"). Staff write it in the same CONTACT column as
+    // the phone, so one cell yields either a phone or a mark, never both.
+    shippingMark:     { type: String, index: true }, // normalised: A-Z0-9 only
+    shippingMarkRaw:  { type: String },              // original from sheet
+
+    // Identity of the customer *within* a waybill. A single tracking number is
+    // routinely shared by several customers on a consolidated shipment, so
+    // waybillNo alone does not identify a parcel — (waybillNo, customerKey)
+    // does. Resolved from phone → mark → name → row; see buildCustomerKey in
+    // services/batch.service.js.
+    customerKey:      { type: String, index: true },
+
+    // Set when no phone could be resolved from the sheet. Drives the staff
+    // "needs a phone number" worklist so the gap can be filled in manually.
+    needsPhone:       { type: Boolean, default: false },
+
     // ── Route / Logistics ─────────────────────────────────────────────────────
     // Full origin/destination (for traditional shipments)
     origin:           { type: locationSchema },
@@ -142,6 +159,10 @@ shipmentItemSchema.index({ shippedBatch:  1, status: 1 });
 shipmentItemSchema.index({ arrivedBatch:  1, status: 1 });
 shipmentItemSchema.index({ status: 1, updatedAt: -1 });
 shipmentItemSchema.index({ waybillNo: 1 }); // Fast lookup by tracking number
+// A waybill shared across customers is identified by this pair, not by
+// waybillNo alone — every upload matcher looks the item up on both fields.
+shipmentItemSchema.index({ waybillNo: 1, customerKey: 1 });
+shipmentItemSchema.index({ needsPhone: 1, updatedAt: -1 }); // staff worklist
 shipmentItemSchema.index({ customerId: 1, createdAt: -1 }); // Customer's items
 shipmentItemSchema.index({ "destination.city": 1 });
 
