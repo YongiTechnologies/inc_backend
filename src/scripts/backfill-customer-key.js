@@ -24,6 +24,7 @@
 require("dotenv").config();
 const mongoose = require("mongoose");
 const dns      = require("dns");
+const fs       = require("fs");
 
 // A mongodb+srv:// URI needs an SRV lookup, which Node performs through c-ares
 // using dns.getServers() — not the OS resolver that ping and nslookup use. On a
@@ -48,6 +49,63 @@ const { connectDB } = require("../config/db");
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const FORCE   = process.argv.includes("--force");
+const NO_BACKUP = process.argv.includes("--no-backup");
+
+// Fields this script can write. Only these are captured for the revert file,
+// which keeps it small enough to be practical on a 15k-record collection.
+const TOUCHED_FIELDS = [
+  "customerPhone", "customerPhoneRaw", "customerKey",
+  "shippingMark", "shippingMarkRaw", "needsPhone",
+];
+
+/**
+ * Write the current value of every field this script may overwrite, so the run
+ * can be undone. Atlas shared tiers have no snapshots, so without this a real
+ * run would be irreversible.
+ */
+async function writeBackup(filter) {
+  const file = `backfill-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  const rows = await ShipmentItem.find(filter)
+    .select(["_id", ...TOUCHED_FIELDS].join(" "))
+    .lean();
+
+  fs.writeFileSync(file, JSON.stringify({
+    takenAt:   new Date().toISOString(),
+    database:  mongoose.connection.name,
+    fields:    TOUCHED_FIELDS,
+    count:     rows.length,
+    records:   rows,
+  }));
+
+  const kb = Math.round(fs.statSync(file).size / 1024);
+  console.log(`backup written: ${file}  (${rows.length} records, ${kb} KB)`);
+  console.log(`  to undo:  npm run backfill-customer-key -- --revert ${file}\n`);
+  return file;
+}
+
+/** Restore the captured fields exactly as they were before the run. */
+async function revert(file) {
+  const snapshot = JSON.parse(fs.readFileSync(file, "utf8"));
+  console.log(`reverting ${snapshot.count} record(s) captured ${snapshot.takenAt}`);
+
+  const ops = snapshot.records.map((r) => {
+    const set = {};
+    const unset = {};
+    for (const f of snapshot.fields) {
+      if (r[f] === undefined) unset[f] = "";
+      else set[f] = r[f];
+    }
+    const update = {};
+    if (Object.keys(set).length)   update.$set   = set;
+    if (Object.keys(unset).length) update.$unset = unset;
+    return { updateOne: { filter: { _id: r._id }, update } };
+  });
+
+  for (let i = 0; i < ops.length; i += 1000) {
+    await ShipmentItem.bulkWrite(ops.slice(i, i + 1000), { ordered: false });
+  }
+  console.log(`reverted ${ops.length} record(s).`);
+}
 
 async function main() {
   await connectDB();
@@ -55,11 +113,23 @@ async function main() {
   // run against production, so the target should never be a guess.
   console.log(`host: ${mongoose.connection.host}`);
   console.log(`database: ${mongoose.connection.name}`);
+  const revertArg = process.argv.indexOf("--revert");
+  if (revertArg !== -1) {
+    const file = process.argv[revertArg + 1];
+    if (!file) throw new Error("--revert needs a backup file path");
+    await revert(file);
+    await mongoose.disconnect();
+    return;
+  }
+
   console.log(DRY_RUN ? "DRY RUN — nothing will be written\n" : "APPLYING CHANGES\n");
 
   const filter = FORCE ? {} : { $or: [{ customerKey: null }, { customerKey: { $exists: false } }] };
   const total  = await ShipmentItem.countDocuments(filter);
   console.log(`${total} record(s) to process\n`);
+
+  // Captured before anything is written, so a real run is always undoable.
+  if (!DRY_RUN && !NO_BACKUP && total > 0) await writeBackup(filter);
 
   const stats = { phone: 0, mark: 0, name: 0, row: 0, markRecovered: 0, unchanged: 0, written: 0 };
   const ops = [];

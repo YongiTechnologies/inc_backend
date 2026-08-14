@@ -5,3 +5,5 @@ node_modules/
 PROMPT.md
 INTEGRATION.md
 .claude
+# Revert files from backfill-customer-key
+backfill-backup-*.json
