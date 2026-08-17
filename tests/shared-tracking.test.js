@@ -67,7 +67,7 @@ const {
   parseUnifiedSheet, parseIntakeSheet, parseShippedSheet,
   processIntakeBatch, processShippedBatch,
   resolveContact, buildCustomerKey, normaliseMark,
-  maskName, maskPhone, maskMark,
+  maskName, maskPhone, maskMark, narrowToCustomer,
 } = require("../src/services/batch.service");
 
 function buildXlsx(aoa) {
@@ -366,6 +366,75 @@ describe("masking withholds other customers' details", () => {
 
   test("a masked phone does not leak its middle digits", () => {
     expect(maskPhone("233244123456")).not.toContain("412");
+  });
+});
+
+// ─── Narrowing a shared number to one customer ────────────────────────────────
+
+describe("narrowToCustomer — every public lookup narrows the same way", () => {
+  // One consolidated tracking number, two unrelated customers — the case that
+  // showed one of them the other's name, goods and CBM.
+  const sammy = {
+    waybillNo: "13250739760", customerName: "SAMMY",
+    customerPhone: "233548590187", shippingMark: null,
+    productDescription: "显示屏无牌", cbm: 3.69,
+  };
+  const other = {
+    waybillNo: "13250739760", customerName: "KOFI",
+    customerPhone: "233557604169", shippingMark: null,
+    productDescription: "CARTONS", cbm: 1.2,
+  };
+  const marked = {
+    waybillNo: "13250739760", customerName: "ANGIE",
+    customerPhone: null, shippingMark: "ACC28672",
+    productDescription: "BAGS", cbm: 0.4,
+  };
+  const all = [sammy, other, marked];
+
+  test("no identifier is not the same as no match", () => {
+    // null tells the caller to ask who they are; [] would wrongly read as
+    // "nothing found" and show a not-found page for a real tracking number.
+    expect(narrowToCustomer(all, {})).toBeNull();
+    expect(narrowToCustomer(all, { phone: "", mark: "" })).toBeNull();
+    expect(narrowToCustomer(all)).toBeNull();
+  });
+
+  test("a phone returns that customer and nobody else", () => {
+    expect(narrowToCustomer(all, { phone: "0548590187" })).toEqual([sammy]);
+  });
+
+  test("the same number in any written form narrows identically", () => {
+    for (const form of ["0548590187", "548590187", "233548590187", "+233 548 590 187"]) {
+      expect(narrowToCustomer(all, { phone: form })).toEqual([sammy]);
+    }
+  });
+
+  test("a shipping mark narrows past case and separators", () => {
+    expect(narrowToCustomer(all, { mark: "acc-286 72" })).toEqual([marked]);
+  });
+
+  test("an identifier matching nobody on the number returns empty, not everybody", () => {
+    expect(narrowToCustomer(all, { phone: "0200000000" })).toEqual([]);
+    expect(narrowToCustomer(all, { mark: "NOBODY" })).toEqual([]);
+  });
+
+  test("a customer with several parcels on the number gets all of them", () => {
+    const second = { ...sammy, productDescription: "FRIDGE", cbm: 1.1 };
+    expect(narrowToCustomer([sammy, other, second], { phone: "0548590187" }))
+      .toEqual([sammy, second]);
+  });
+
+  test("one customer's details never come back under another's identifier", () => {
+    const mine = narrowToCustomer(all, { phone: "0557604169" });
+    expect(mine).toEqual([other]);
+    expect(mine.map((i) => i.customerName)).not.toContain("SAMMY");
+    expect(mine.map((i) => i.cbm)).not.toContain(3.69);
+  });
+
+  test("a record with no contact at all is never matched by accident", () => {
+    const orphan = { waybillNo: "13250739760", customerPhone: null, shippingMark: null };
+    expect(narrowToCustomer([orphan], { phone: "0548590187" })).toEqual([]);
+    expect(narrowToCustomer([orphan], { mark: "ACC28672" })).toEqual([]);
   });
 });
 

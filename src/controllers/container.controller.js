@@ -8,10 +8,18 @@ const {
   applyBulkStatus,
   describeBulkResult,
 } = require("../services/logistics.service");
+const { narrowToCustomer } = require("../services/batch.service");
 const { respond }      = require("../utils/response");
 
 // Fields never returned to public callers
 const PUBLIC_SELECT = "-staffNotes";
+
+// The contact fields are read to match a caller against a shared waybill, never
+// to be echoed back — a bare tracking number must not reveal anyone's number.
+function stripIdentifiers(item) {
+  const { customerPhone, shippingMark, ...rest } = item;
+  return rest;
+}
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
@@ -47,8 +55,15 @@ async function listContainerLoadings(req, res, next) {
 }
 
 /**
- * GET /api/container-loadings/search?q=<container_number_or_waybill>
+ * GET /api/container-loadings/search?q=<container_number_or_waybill>&phone=&mark=
  * Public search — matches container number prefix OR waybill inside container.
+ *
+ * A waybill shared by several customers resolves to no single shipment, so
+ * `phone` / `mark` narrow it to one of them exactly as the tracker does.
+ * Without an identifier a shared waybill returns the container only, and
+ * `item: null` — the customer-specific fields (name, goods, CBM, quantity)
+ * belong to whoever asks, and handing back an arbitrary row put one customer's
+ * details against another customer's shipment.
  */
 async function searchContainerLoadings(req, res, next) {
   try {
@@ -56,6 +71,7 @@ async function searchContainerLoadings(req, res, next) {
     if (!q || q.length < 2) {
       return respond(res, 400, false, "Query must be at least 2 characters");
     }
+    const { phone, mark } = req.query;
 
     const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -72,22 +88,47 @@ async function searchContainerLoadings(req, res, next) {
       .limit(10);
 
     // 2. If query looks like a waybill (not matching a container directly),
-    //    find the ShipmentItem and resolve its container
+    //    find the ShipmentItem(s) on it and resolve their container
     let waybillMatch = null;
     if (containers.length === 0 || !q.match(/^[A-Z]{4}\d/)) {
-      const item = await ShipmentItem.findOne({ waybillNo: q })
-        .select("waybillNo containerRef status customerName destinationCity cbm productDescription quantity -_id")
+      const rows = await ShipmentItem.find({ waybillNo: q })
+        .select(
+          "waybillNo containerRef status customerName destinationCity cbm " +
+          "productDescription quantity customerPhone shippingMark -_id"
+        )
+        .sort({ updatedAt: -1 })
         .lean();
 
-      if (item?.containerRef) {
-        const container = await ContainerLoading.findOne({
-          containerNumber: item.containerRef.toUpperCase(),
-        })
-          .select(PUBLIC_SELECT)
-          .lean();
+      if (rows.length) {
+        // null = caller named nobody; [] = the identifier matched nobody here.
+        const narrowed = narrowToCustomer(rows, { phone, mark });
+        const mine     = narrowed || (rows.length === 1 ? rows : []);
+        // Only one shipment can fill a card. Several parcels for the same
+        // customer on one number is not a failure, but it is not a single
+        // match either — the tracker lists them all.
+        const item     = mine.length === 1 ? stripIdentifiers(mine[0]) : null;
+
+        // The container is common to everyone on the waybill, so it is safe to
+        // resolve even unidentified — but only when the records agree on it.
+        const refs = [...new Set(
+          (mine.length ? mine : rows).map((r) => r.containerRef).filter(Boolean)
+            .map((r) => String(r).toUpperCase())
+        )];
+
+        const container = refs.length === 1
+          ? await ContainerLoading.findOne({ containerNumber: refs[0] })
+              .select(PUBLIC_SELECT)
+              .lean()
+          : null;
 
         if (container) {
-          waybillMatch = { item, container };
+          // Distinct customers, not rows — one customer with two parcels on a
+          // number is not a shared number, and must not be described as one.
+          const sharedBy = new Set(
+            rows.map((r) => r.customerPhone || r.shippingMark || r.customerName || "?")
+          ).size;
+
+          waybillMatch = { item, container, sharedBy, ambiguous: item === null };
         }
       }
     }

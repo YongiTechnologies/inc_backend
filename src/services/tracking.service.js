@@ -77,13 +77,9 @@ async function getTrackingByNumber(waybillNo, { phone, mark } = {}) {
 
   if (!all.length) return { items: [], ambiguous: false, choices: [], total: 0 };
 
-  const wantPhone = phone ? batchService.normalisePhone(phone) : null;
-  const wantMark  = mark  ? batchService.normaliseMark(mark)   : null;
+  const narrowed = batchService.narrowToCustomer(all, { phone, mark });
 
-  if (wantPhone || wantMark) {
-    const narrowed = all.filter(
-      (i) => (wantPhone && i.customerPhone === wantPhone) || (wantMark && i.shippingMark === wantMark)
-    );
+  if (narrowed) {
     return {
       items:     narrowed.map((i) => buildItemResponse(i, { includeInternal: false })),
       ambiguous: false,

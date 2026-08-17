@@ -1420,6 +1420,27 @@ function maskMark(mark) {
 }
 
 /**
+ * Reduce the records on a tracking number to the one customer who asked.
+ *
+ * The single place identifiers are compared, so every public lookup narrows the
+ * same way. Returns null when the caller supplied no identifier at all — which
+ * is a different situation from an identifier that matched nothing ([]), and
+ * the two must not be confused: the first means "say who you are", the second
+ * means "that is not you".
+ */
+function narrowToCustomer(items, { phone, mark } = {}) {
+  const wantPhone = phone ? normalisePhone(phone) : null;
+  const wantMark  = mark  ? normaliseMark(mark)   : null;
+  if (!wantPhone && !wantMark) return null;
+
+  return items.filter(
+    (i) =>
+      (wantPhone && i.customerPhone === wantPhone) ||
+      (wantMark  && i.shippingMark  === wantMark)
+  );
+}
+
+/**
  * A shared tracking number belongs to several customers, so a bare number is
  * not proof of ownership. This is all a caller gets until they name which of
  * them they are — enough to spot your own entry, not enough to learn a
@@ -1473,15 +1494,9 @@ async function lookupByWaybill(waybill, { phone, mark } = {}) {
   const all = await publicQuery({ waybillNo: waybill });
   if (!all.length) return { items: [], ambiguous: false, choices: [], total: 0 };
 
-  const narrowed = [];
-  const wantPhone = phone ? normalisePhone(phone) : null;
-  const wantMark  = mark  ? normaliseMark(mark)   : null;
+  const narrowed = narrowToCustomer(all, { phone, mark });
 
-  if (wantPhone || wantMark) {
-    for (const item of all) {
-      if (wantPhone && item.customerPhone === wantPhone) narrowed.push(item);
-      else if (wantMark && item.shippingMark === wantMark) narrowed.push(item);
-    }
+  if (narrowed) {
     // An identifier that matches nothing on this number is a failed lookup, not
     // a reason to fall back to showing everybody.
     return { items: narrowed.map(sanitizePublicItem), ambiguous: false, choices: [], total: all.length };
@@ -1519,6 +1534,7 @@ module.exports = {
   lookupByPhone,
   lookupByMark,
   lookupByWaybill,
+  narrowToCustomer,
   sanitizePublicItem,
   maskName,
   maskPhone,
