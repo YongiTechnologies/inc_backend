@@ -1,8 +1,38 @@
 const express = require("express");
 const router  = express.Router();
+const rateLimit = require("express-rate-limit");
 const ctrl    = require("../controllers/auth.controller");
 const { authenticate } = require("../middleware/auth.middleware");
 const { validate, validators } = require("../utils/validators");
+
+// ─── Rate limiters ────────────────────────────────────────────────────────────
+//
+// Split deliberately. `credentials` is a brute-force guard: it belongs on the
+// endpoints where a password or a reset link can be guessed, and nowhere else.
+// It used to be mounted across the whole /api/auth prefix, which meant keeping
+// a session alive competed with the login budget — eleven page loads from one
+// office IP and every `/auth/refresh` came back 429, which the client could
+// only read as "your session is over".
+//
+// `session` covers the housekeeping endpoints an open tab calls on its own
+// schedule (`/me` on every page load, `/refresh` roughly every 15 minutes per
+// tab, `/logout` once). Its ceiling is high enough that normal use by a whole
+// office never reaches it, while a runaway refresh loop still gets stopped.
+const credentials = rateLimit({
+  windowMs:        15 * 60 * 1000,
+  max:             10,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message: { success: false, message: "Too many attempts. Please try again in 15 minutes." },
+});
+
+const session = rateLimit({
+  windowMs:        15 * 60 * 1000,
+  max:             parseInt(process.env.SESSION_RATE_LIMIT || "300", 10),
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message: { success: false, message: "Too many session requests. Please wait a moment." },
+});
 
 /**
  * @swagger
@@ -88,7 +118,7 @@ const { validate, validators } = require("../utils/validators");
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/register", validate(validators.register), ctrl.register);
+router.post("/register", credentials, validate(validators.register), ctrl.register);
 
 /**
  * @swagger
@@ -178,7 +208,7 @@ router.post("/register", validate(validators.register), ctrl.register);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/login", validate(validators.login), ctrl.login);
+router.post("/login", credentials, validate(validators.login), ctrl.login);
 
 /**
  * @swagger
@@ -228,7 +258,7 @@ router.post("/login", validate(validators.login), ctrl.login);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/forgot-password", validate(validators.forgotPassword), ctrl.forgotPassword);
+router.post("/forgot-password", credentials, validate(validators.forgotPassword), ctrl.forgotPassword);
 
 /**
  * @swagger
@@ -288,7 +318,7 @@ router.post("/forgot-password", validate(validators.forgotPassword), ctrl.forgot
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/reset-password", validate(validators.resetPassword), ctrl.resetPassword);
+router.post("/reset-password", credentials, validate(validators.resetPassword), ctrl.resetPassword);
 
 /**
  * @swagger
@@ -331,7 +361,7 @@ router.post("/reset-password", validate(validators.resetPassword), ctrl.resetPas
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/refresh", ctrl.refresh);
+router.post("/refresh", session, ctrl.refresh);
 
 /**
  * @swagger
@@ -367,7 +397,7 @@ router.post("/refresh", ctrl.refresh);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.post("/logout", ctrl.logout);
+router.post("/logout", session, ctrl.logout);
 
 /**
  * @swagger
@@ -408,13 +438,13 @@ router.post("/logout", ctrl.logout);
  *             schema:
  *               $ref: '#/components/schemas/Error500'
  */
-router.get("/me", authenticate, ctrl.me);
+router.get("/me", session, authenticate, ctrl.me);
 
 // ─── Phone-based auth ─────────────────────────────────────────────────────────
-router.post("/phone-check",        ctrl.phoneCheck);
-router.post("/phone-login",        ctrl.phoneLogin);
-router.post("/phone-set-password", ctrl.phoneSetPassword);
-router.post("/phone-signup",       ctrl.phoneSignup);
+router.post("/phone-check",        credentials, ctrl.phoneCheck);
+router.post("/phone-login",        credentials, ctrl.phoneLogin);
+router.post("/phone-set-password", credentials, ctrl.phoneSetPassword);
+router.post("/phone-signup",       credentials, ctrl.phoneSignup);
 
 // ─── Profile update ───────────────────────────────────────────────────────────
 router.patch("/me/phone", authenticate, ctrl.updateMyPhone);

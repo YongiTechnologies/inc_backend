@@ -8,6 +8,14 @@ const { respond } = require("../utils/response");
 const audit = require("../services/audit.service");
 const { normalisePhone } = require("../services/batch.service");
 
+// Staff sessions carry other people's shipment data on shared back-office
+// machines, so they lapse after a period of no use. Customers are unaffected —
+// they see only their own parcels, and being signed out mid-visit is pure
+// friction for them. 0 disables the window entirely.
+const STAFF_IDLE_MS =
+  parseInt(process.env.STAFF_IDLE_TIMEOUT_MINUTES || "30", 10) * 60 * 1000;
+const STAFF_ROLES = ["admin", "employee"];
+
 const COOKIE_OPTS = {
   httpOnly: true,
   secure: true, // Always true for cross-origin HTTPS
@@ -15,6 +23,13 @@ const COOKIE_OPTS = {
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
+
+// clearCookie must repeat the attributes the cookie was set with — a mismatched
+// sameSite/secure/path is a different cookie to the browser, and the original
+// survives. maxAge is deliberately dropped: express feeds it back through
+// res.cookie, which recomputes `expires` as now + maxAge and renews the cookie
+// for another seven days instead of expiring it.
+const { maxAge: _cookieMaxAge, ...CLEAR_COOKIE_OPTS } = COOKIE_OPTS;
 
 async function register(req, res, next) {
   try {
@@ -150,6 +165,26 @@ async function refresh(req, res, next) {
     });
     if (!storedToken) return respond(res, 401, false, "Invalid or expired refresh token");
 
+    // Sliding idle window for staff. The client refreshes only while someone is
+    // actually using the tab, so a session left untouched stops being renewed
+    // and lapses here. `reason` lets the frontend tell an idle timeout apart
+    // from a revoked or genuinely expired session when it explains itself.
+    if (STAFF_IDLE_MS > 0 && STAFF_ROLES.includes(user.role)) {
+      const lastUsed = storedToken.lastUsedAt || storedToken.createdAt;
+      if (lastUsed && Date.now() - new Date(lastUsed).getTime() > STAFF_IDLE_MS) {
+        storedToken.isRevoked = true;
+        storedToken.revokedAt = new Date();
+        await storedToken.save();
+        res.clearCookie("refreshToken", CLEAR_COOKIE_OPTS);
+        return respond(res, 401, false, "Session timed out after a period of inactivity.", {
+          reason: "idle_timeout",
+        });
+      }
+    }
+
+    storedToken.lastUsedAt = new Date();
+    await storedToken.save();
+
     return respond(res, 200, true, "Token refreshed", { accessToken: signAccess(user._id) });
   } catch {
     return respond(res, 401, false, "Invalid or expired refresh token");
@@ -169,7 +204,10 @@ async function logout(req, res) {
       }
     );
   }
-  res.clearCookie("refreshToken");
+  // Must repeat the attributes the cookie was set with (sameSite/secure/path),
+  // otherwise the browser treats it as a different cookie and leaves the
+  // original in place.
+  res.clearCookie("refreshToken", CLEAR_COOKIE_OPTS);
   return respond(res, 200, true, "Logged out");
 }
 

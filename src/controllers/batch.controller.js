@@ -86,7 +86,10 @@ async function uploadShipped(req, res, next) {
     const parsed = parseShippedSheet(req.file.buffer);
     // Opt-in: hold warehouse items not on this packing list (off by default).
     const autoHold = req.body.autoHold === "true" || req.body.autoHold === true;
-    const result = await processShippedBatch(parsed, req.user._id, { autoHold });
+    const result = await processShippedBatch(parsed, req.user._id, {
+      autoHold,
+      filename: req.file.originalname,
+    });
     batch = result.batch;
     await audit.log({
       performedBy: req.user._id,
@@ -159,7 +162,10 @@ async function deleteBatch(req, res, next) {
     return respond(res, 200, true, "Upload retracted successfully", result);
   } catch (err) {
     if (err instanceof BatchRetractionError) {
-      return respond(res, 409, false, err.message);
+      // canForce tells the UI this particular refusal is one the force flag can
+      // override, so it can offer the escape hatch instead of leaving staff
+      // stuck on a dead button.
+      return respond(res, 409, false, err.message, { canForce: !!err.canForce });
     }
     next(err);
   }

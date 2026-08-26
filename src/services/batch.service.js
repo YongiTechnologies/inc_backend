@@ -133,12 +133,34 @@ function safeDate(raw) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// A packing list is identified by its packing-list number, else its container
+// number. Older sheets predating those fields have neither, and the fallback
+// used to be `SHIPPED-<today>` — so the second old packing list uploaded on any
+// given day collided with the first and was rejected as a duplicate of a file it
+// had nothing to do with. Key the fallback on the sheet's own loading date (or
+// ETD) plus its filename instead, the same way intake batches are keyed: stable
+// for a genuine re-upload of the same file, distinct between different files.
+function shippedBatchCode(metadata, filename) {
+  const { BATCH_REF: batchRef, CONTAINER_NUMBER: containerNumber } = metadata;
+  if (batchRef)        return `PKL-${batchRef}`;
+  if (containerNumber) return `CTR-${containerNumber}`;
+
+  const sheetDate = safeDate(metadata.LOADING_DATE) || safeDate(metadata.ETD);
+  const iso  = (sheetDate || new Date()).toISOString().slice(0, 10);
+  const name = slugifyFilename(filename);
+  return name ? `SHIPPED-${iso}-${name}` : `SHIPPED-${iso}`;
+}
+
+function slugifyFilename(filename) {
+  return filename
+    ? filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").toLowerCase()
+    : "";
+}
+
 function intakeBatchCode(date, filename) {
   const d   = date instanceof Date ? date : new Date(date);
   const iso = isNaN(d) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
-  const name = filename
-    ? filename.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").toLowerCase()
-    : "";
+  const name = slugifyFilename(filename);
   return name ? `INTAKE-${iso}-${name}` : `INTAKE-${iso}`;
 }
 
@@ -929,7 +951,7 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
 // ─── Processor: Shipped batch (packing list / loading list) ───────────────────
 
 async function processShippedBatch(parsedData, uploadedBy, options = {}) {
-  const { autoHold = false } = options;
+  const { autoHold = false, filename = null } = options;
   const { metadata, items, skippedRows } = parsedData;
   const {
     CONTAINER_NUMBER: containerNumber,
@@ -942,11 +964,7 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
     BATCH_REF:        batchRef,
   } = metadata;
 
-  const batchCode = batchRef
-    ? `PKL-${batchRef}`
-    : containerNumber
-    ? `CTR-${containerNumber}`
-    : `SHIPPED-${new Date().toISOString().slice(0, 10)}`;
+  const batchCode = shippedBatchCode(metadata, filename);
 
   const existing = await Batch.findOne({ batchCode, stage: "shipped" });
   if (existing) throw new DuplicateBatchError(batchCode, existing);
@@ -1135,9 +1153,13 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
 // retracted first (retract in reverse order: arrived → shipped → intake).
 
 class BatchRetractionError extends Error {
-  constructor(message) {
+  // canForce marks the failures a force retract can override (the
+  // "items have progressed" guard). The UI reads it to decide whether to offer
+  // the override, instead of pattern-matching the message text.
+  constructor(message, { canForce = false } = {}) {
     super(message);
-    this.name = "BatchRetractionError";
+    this.name     = "BatchRetractionError";
+    this.canForce = canForce;
   }
 }
 
@@ -1153,7 +1175,8 @@ async function retractIntakeBatch(batch, { force = false } = {}) {
     });
     if (progressed > 0) {
       throw new BatchRetractionError(
-        `Cannot retract: ${progressed} item(s) from this intake batch have already been shipped or changed status. Retract the later batch first.`
+        `Cannot retract: ${progressed} item(s) from this intake batch have already been shipped or changed status. Retract the later batch first.`,
+        { canForce: true }
       );
     }
   }
@@ -1177,7 +1200,8 @@ async function retractShippedBatch(batch, { force = false } = {}) {
     });
     if (progressed > 0) {
       throw new BatchRetractionError(
-        `Cannot retract: ${progressed} item(s) from this packing list have already arrived or changed status. Retract the arrived batch first.`
+        `Cannot retract: ${progressed} item(s) from this packing list have already arrived or changed status. Retract the arrived batch first.`,
+        { canForce: true }
       );
     }
   }
@@ -1249,7 +1273,8 @@ async function retractArrivedBatch(batch, { force = false } = {}) {
     });
     if (progressed > 0) {
       throw new BatchRetractionError(
-        `Cannot retract: ${progressed} item(s) from this arrival list have already moved past customs.`
+        `Cannot retract: ${progressed} item(s) from this arrival list have already moved past customs.`,
+        { canForce: true }
       );
     }
   }

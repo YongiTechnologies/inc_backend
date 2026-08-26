@@ -570,3 +570,71 @@ describe("processShippedBatch auto-hold is opt-in", () => {
     );
   });
 });
+
+// ─── Packing-list batch codes ────────────────────────────────────────────────
+//
+// Two different old packing lists uploaded on the same day used to collapse onto
+// `SHIPPED-<today>` and the second was rejected as a duplicate of the first.
+
+describe("shipped batchCode identifies the sheet, not the upload day", () => {
+  const codeOf = () => mockBatchCreate.mock.calls[0][0].batchCode;
+
+  const run = (metadata, filename) => {
+    const parsed = { metadata, items: [], skippedRows: [] };
+    return processShippedBatch(parsed, "user001", { filename });
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockBatchFindOne.mockResolvedValue(null);
+    mockBatchFind.mockReturnValue({ select: () => Promise.resolve([]) });
+    mockBatchCreate.mockImplementation((doc) => Promise.resolve({ _id: "b1", ...doc }));
+    mockBatchFindByIdUpdate.mockResolvedValue(null);
+    mockBatchFindById.mockResolvedValue({ _id: "b1" });
+    mockItemFind.mockReturnValue([]);
+    mockContainerUpdate.mockResolvedValue({});
+  });
+
+  test("packing list number wins", async () => {
+    await run({ BATCH_REF: "2025-004", CONTAINER_NUMBER: "MSBU8308501" }, "any.xlsx");
+    expect(codeOf()).toBe("PKL-2025-004");
+  });
+
+  test("falls back to the container number", async () => {
+    await run({ CONTAINER_NUMBER: "MSBU8308501" }, "any.xlsx");
+    expect(codeOf()).toBe("CTR-MSBU8308501");
+  });
+
+  test("with neither, uses the sheet's own loading date — not today", async () => {
+    await run({ LOADING_DATE: new Date("2025-04-19T00:00:00Z") }, "loading_april.xlsx");
+    expect(codeOf()).toBe("SHIPPED-2025-04-19-loading_april");
+  });
+
+  test("two different old packing lists on the same day get different codes", async () => {
+    await run({ LOADING_DATE: new Date("2025-04-19T00:00:00Z") }, "april_19.xlsx");
+    const first = codeOf();
+    jest.clearAllMocks();
+    mockBatchFindOne.mockResolvedValue(null);
+    mockBatchFind.mockReturnValue({ select: () => Promise.resolve([]) });
+    mockBatchCreate.mockImplementation((doc) => Promise.resolve({ _id: "b2", ...doc }));
+    mockBatchFindByIdUpdate.mockResolvedValue(null);
+    mockBatchFindById.mockResolvedValue({ _id: "b2" });
+    mockItemFind.mockReturnValue([]);
+    await run({ LOADING_DATE: new Date("2025-05-02T00:00:00Z") }, "may_02.xlsx");
+    expect(codeOf()).not.toBe(first);
+  });
+
+  test("re-uploading the same file still resolves to the same code", async () => {
+    await run({ LOADING_DATE: new Date("2025-04-19T00:00:00Z") }, "april_19.xlsx");
+    const first = codeOf();
+    jest.clearAllMocks();
+    mockBatchFindOne.mockResolvedValue(null);
+    mockBatchFind.mockReturnValue({ select: () => Promise.resolve([]) });
+    mockBatchCreate.mockImplementation((doc) => Promise.resolve({ _id: "b2", ...doc }));
+    mockBatchFindByIdUpdate.mockResolvedValue(null);
+    mockBatchFindById.mockResolvedValue({ _id: "b2" });
+    mockItemFind.mockReturnValue([]);
+    await run({ LOADING_DATE: new Date("2025-04-19T00:00:00Z") }, "april_19.xlsx");
+    expect(codeOf()).toBe(first);
+  });
+});

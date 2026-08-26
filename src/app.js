@@ -67,17 +67,41 @@ if (process.env.NODE_ENV !== "production" || process.env.SWAGGER_ENABLED === "tr
 }
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
-const general = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
-const auth    = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
-const tracker = rateLimit({ windowMs: 60 * 1000, max: 30 });
-const contact = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
-const upload  = rateLimit({ windowMs: 60 * 60 * 1000, max: 20 });
+// Every limiter answers with the standard { success, message } envelope. The
+// default express-rate-limit reply is a bare HTML string, so every frontend
+// `err.response.data.message` read came back undefined and the UI fell through
+// to a generic error — or, where the caller swallowed the failure, to a silently
+// empty list with nothing explaining why.
+const limitMessage = (message) => ({
+  message: { success: false, message },
+  standardHeaders: true,
+  legacyHeaders:   false,
+});
+
+const general = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, ...limitMessage("Too many requests. Please wait a moment and try again.") });
+const tracker = rateLimit({ windowMs: 60 * 1000,      max: 30,  ...limitMessage("Too many tracking lookups. Please wait a moment.") });
+const contact = rateLimit({ windowMs: 60 * 60 * 1000, max: 5,   ...limitMessage("Too many messages sent. Please try again later.") });
 
 app.use("/api", general);
-app.use("/api/auth", auth);
 app.use("/api/tracking", tracker);
 app.use("/api/contact", contact);
-app.use("/api/batches", upload);
+
+// NOTE: the brute-force limiter is no longer mounted across /api/auth either.
+// At 10 requests / 15 min per IP it covered `/auth/me` and `/auth/refresh` as
+// well as `/auth/login`, so eleven page loads from one office IP made every
+// token refresh return 429. The client cannot tell a throttle from a rejected
+// session, so it signed people out mid-work while their session was perfectly
+// valid. It is now split per route — see src/routes/auth.routes.js.
+
+// NOTE: the upload limiter deliberately does NOT live here. It used to be
+// mounted as `app.use("/api/batches", upload)` with a 20/hour cap, which
+// throttled the whole prefix — the batch list, the batch items, and the retract
+// (DELETE) endpoint included — and counted requests before authentication, so
+// even 401s from an expiring token burned the budget. Staff who uploaded a few
+// files and clicked around the dashboard used up the 20 within minutes, after
+// which "Manage Uploads" came back empty and "Delete previous & upload" did
+// nothing for the rest of the hour. It is now applied per-route to the three
+// upload endpoints only — see src/routes/batch.routes.js.
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api/auth",     authRoutes);

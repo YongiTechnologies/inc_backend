@@ -28,6 +28,25 @@ const publicLimiter = rateLimit({
 const staffOnly    = [authenticate, authorize("admin", "employee")];
 const customerOnly = [authenticate, authorize("customer")];
 
+// ─── Upload limiter (the three POST upload endpoints only) ───────────────────
+//
+// Applied per route rather than across the /api/batches prefix, so reading the
+// batch list, opening a batch's items, or retracting a wrong upload is never
+// throttled by how many files were uploaded. Keyed on the signed-in staff
+// member, not the IP — a whole office behind one NAT address used to share a
+// single budget. Mounted after `staffOnly` so req.user is populated.
+const uploadLimiter = rateLimit({
+  windowMs:        60 * 60 * 1000,
+  max:             parseInt(process.env.UPLOAD_RATE_LIMIT || "60", 10),
+  standardHeaders: true,
+  legacyHeaders:   false,
+  keyGenerator:    (req) => (req.user ? String(req.user._id) : req.ip),
+  message: {
+    success: false,
+    message: "Upload limit reached for this hour. Please wait before uploading more files.",
+  },
+});
+
 // =============================================================================
 // UPLOAD ENDPOINTS (staff only)
 // =============================================================================
@@ -124,9 +143,9 @@ const customerOnly = [authenticate, authorize("customer")];
  *       400: { description: No file or wrong type }
  *       401: { description: Unauthorized }
  */
-router.post("/batches/validate", ...staffOnly, upload.single("file"), ctrl.validateUpload);
+router.post("/batches/validate", ...staffOnly, uploadLimiter, upload.single("file"), ctrl.validateUpload);
 
-router.post("/batches/intake",  ...staffOnly, upload.single("file"), ctrl.uploadIntake);
+router.post("/batches/intake",  ...staffOnly, uploadLimiter, upload.single("file"), ctrl.uploadIntake);
 
 /**
  * @swagger
@@ -160,7 +179,7 @@ router.post("/batches/intake",  ...staffOnly, upload.single("file"), ctrl.upload
  *       400: { description: Invalid file }
  *       401: { description: Unauthorized }
  */
-router.post("/batches/shipped",  ...staffOnly, upload.single("file"), ctrl.uploadShipped);
+router.post("/batches/shipped",  ...staffOnly, uploadLimiter, upload.single("file"), ctrl.uploadShipped);
 
 /**
  * @swagger
@@ -194,7 +213,7 @@ router.post("/batches/shipped",  ...staffOnly, upload.single("file"), ctrl.uploa
  *       401: { description: Unauthorized }
  *       409: { description: Already uploaded }
  */
-router.post("/batches/arrived",  ...staffOnly, upload.single("file"), ctrl.uploadArrived);
+router.post("/batches/arrived",  ...staffOnly, uploadLimiter, upload.single("file"), ctrl.uploadArrived);
 
 /**
  * @swagger

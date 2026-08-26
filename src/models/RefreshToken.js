@@ -29,6 +29,14 @@ const refreshTokenSchema = new mongoose.Schema(
       index: true,
     },
     revokedAt: Date,
+    // Bumped every time this token is exchanged for a new access token. Staff
+    // sessions use it as a sliding idle window: stop using the app for long
+    // enough and the token stops being accepted, so the 30-minute timeout is
+    // enforced by the server rather than trusted to the browser.
+    lastUsedAt: {
+      type: Date,
+      default: Date.now,
+    },
     revokedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
