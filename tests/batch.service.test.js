@@ -327,6 +327,59 @@ describe("Status transition: in_warehouse → shipped when TRACKING N0. matches"
   });
 });
 
+// ─── customerKey fallback must not swallow a customer's second parcel ────────
+
+describe("customerKey fallback: multiple parcels for one customer under different waybills", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockBatchFindOne.mockResolvedValue(null); // no duplicate
+    mockBatchFind.mockReturnValue({ select: () => Promise.resolve([]) }); // no recent intake batches
+    mockBatchCreate.mockImplementation((doc) => Promise.resolve({ _id: "batch001", ...doc }));
+    mockBatchFindByIdUpdate.mockResolvedValue(null);
+    mockBatchFindById.mockResolvedValue({ _id: "batch001", batchCode: "SHIPPED-TEST" });
+    mockItemUpdateOne.mockResolvedValue({ modifiedCount: 0 });
+    mockItemUpdateMany.mockResolvedValue({ modifiedCount: 0 });
+    mockUserFindOne.mockReturnValue({ select: () => Promise.resolve(null) });
+  });
+
+  test("second parcel for the same customer, under a waybill intake never saw, creates a new record instead of being dropped", async () => {
+    const loadingBuf    = loadFixture("../docs/excel-templates/loading-template.xlsx");
+    const loadingParsed = parseShippedSheet(loadingBuf);
+
+    // Two synthetic rows for the same customer under different waybills —
+    // neither matches the existing record's waybill, so both can only be
+    // found via the customerKey fallback.
+    const base = loadingParsed.items[0];
+    const row1 = { ...base, waybillNo: "AAA111", customerKey: "p:233200000000" };
+    const row2 = { ...base, waybillNo: "BBB222", customerKey: "p:233200000000" };
+    loadingParsed.items = [row1, row2];
+
+    // One existing in_warehouse record for this customer, under yet another
+    // waybill — reachable only through the customerKey index, not by waybill.
+    const fakeItem = {
+      waybillNo:    "CCC999",
+      customerKey:  "p:233200000000",
+      status:       "in_warehouse",
+      stageHistory: [],
+      save:         jest.fn().mockResolvedValue(true),
+    };
+    mockItemFind.mockReturnValue([fakeItem]);
+    mockItemCreate.mockResolvedValue({ waybillNo: "BBB222", customerKey: "p:233200000000", status: "shipped" });
+
+    await processShippedBatch(loadingParsed, "user001");
+
+    // Row 1 claims the existing record via the customerKey fallback.
+    expect(fakeItem.status).toBe("shipped");
+    expect(fakeItem.save).toHaveBeenCalledTimes(1);
+
+    // Row 2 must not re-match the now-"shipped" fakeItem and be silently
+    // dropped — it belongs to the same customer but is a different parcel,
+    // so it must create its own record.
+    expect(mockItemCreate).toHaveBeenCalledTimes(1);
+    expect(mockItemCreate.mock.calls[0][0]).toEqual(expect.objectContaining({ waybillNo: "BBB222" }));
+  });
+});
+
 // ─── Unrecognized column warning ──────────────────────────────────────────────
 
 describe("headerWarnings for unrecognized columns", () => {

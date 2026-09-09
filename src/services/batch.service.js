@@ -880,7 +880,15 @@ function matchExistingItem(item, existingByWaybill, existingByCustomerKey) {
   // as a new record / an unclaimed leftover instead of a wrong merge).
   if (existingByCustomerKey && item.customerKey) {
     const byKey = existingByCustomerKey.get(item.customerKey) || [];
-    if (byKey.length === 1) return byKey[0];
+    if (byKey.length === 1) {
+      // Consume it: once this record is claimed, the same customer's next
+      // row (a second parcel under yet another waybill) must not match it
+      // again — that record is about to become "shipped" here, and matching
+      // it a second time would hit the already-shipped short-circuit above
+      // and silently drop the second parcel instead of creating it.
+      existingByCustomerKey.delete(item.customerKey);
+      return byKey[0];
+    }
   }
 
   return null;
@@ -1043,8 +1051,12 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
   // list inherits it unless the row had its own expected-delivery date.
   const etaDate = safeDate(eta);
 
-  const existingByWaybill    = await loadExistingByWaybill(items);
-  const existingByCustomerKey = await loadExistingByCustomerKey(items);
+  // Independent queries — run concurrently rather than paying two round-trips
+  // serially on every packing-list upload.
+  const [existingByWaybill, existingByCustomerKey] = await Promise.all([
+    loadExistingByWaybill(items),
+    loadExistingByCustomerKey(items),
+  ]);
 
   for (const item of items) {
     const customerId = await findUserByPhone(item.customerPhone);
@@ -1150,6 +1162,26 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
     ],
   };
 
+  // Read-only leftovers review: recent intake parcels this packing list did
+  // not claim, so staff can see and act on them instead of them silently
+  // sitting in_warehouse forever. Snapshotted *before* auto-hold runs below —
+  // auto-hold flips these same records out of status "in_warehouse", which
+  // would otherwise make notOnListFilter match nothing and always report an
+  // empty leftovers list whenever autoHold is on. A single find() covers
+  // both the sample and the count, avoiding a second round-trip.
+  const leftoverDocs = await ShipmentItem.find(notOnListFilter)
+    .select("waybillNo customerName customerKey")
+    .lean();
+  const leftoverCount = leftoverDocs.length;
+  const leftovers = {
+    count:  leftoverCount,
+    sample: leftoverDocs.slice(0, 20).map((d) => ({
+      waybillNo:    d.waybillNo,
+      customerName: d.customerName,
+      customerKey:  d.customerKey,
+    })),
+  };
+
   // Auto-hold items still in_warehouse from recent intake batches not in this
   // list. This is OFF by default — a mismatched or partial packing list would
   // otherwise wrongly hold every other warehouse parcel. When enabled, an item
@@ -1174,23 +1206,6 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
     );
     heldItems = heldResult.modifiedCount;
   }
-
-  // Read-only leftovers review: recent intake parcels this packing list did
-  // not claim, so staff can see and act on them instead of them silently
-  // sitting in_warehouse forever. Always computed (autoHold or not) and
-  // changes nothing by itself.
-  const leftoverDocs = await ShipmentItem.find(notOnListFilter)
-    .select("waybillNo customerName customerKey")
-    .lean();
-  const leftoverCount = await ShipmentItem.countDocuments(notOnListFilter);
-  const leftovers = {
-    count:  leftoverCount,
-    sample: leftoverDocs.slice(0, 20).map((d) => ({
-      waybillNo:    d.waybillNo,
-      customerName: d.customerName,
-      customerKey:  d.customerKey,
-    })),
-  };
 
   const totalItems = newItems + matchedItems;
   await Batch.findByIdAndUpdate(batch._id, {
