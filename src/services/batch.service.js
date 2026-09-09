@@ -701,7 +701,7 @@ function parseArrivedSheet(buffer) {
 
 // ─── Processor: Arrived batch ─────────────────────────────────────────────────
 
-async function processArrivedBatch(parsedData, uploadedBy) {
+async function processArrivedBatch(parsedData, uploadedBy, filename = null) {
   const { metadata, items, skippedRows } = parsedData;
   const { containerNumber, arrivalDate, blNumber } = metadata;
 
@@ -719,6 +719,7 @@ async function processArrivedBatch(parsedData, uploadedBy) {
     stage:      "arrived",
     uploadedBy,
     skippedRows,
+    sourceFilename: filename || undefined,
     containerRefs: containerNumber
       ? [{ code: batchCode, id: containerNumber, date: arrivalDate }]
       : [],
@@ -809,6 +810,29 @@ async function loadExistingByWaybill(items) {
 }
 
 /**
+ * Load every in_warehouse/held record whose customerKey appears in this
+ * sheet, grouped by customerKey. Used only as a last-resort match when a
+ * packing list carries a different waybill number for a customer than the
+ * one recorded at intake — otherwise that intake row is matched by nothing
+ * and a duplicate "shipped" record is created for the same parcel.
+ */
+async function loadExistingByCustomerKey(items) {
+  const keys = [...new Set(items.map((i) => i.customerKey).filter(Boolean))];
+  if (!keys.length) return new Map();
+
+  const docs = await ShipmentItem.find({
+    customerKey: { $in: keys },
+    status:      { $in: ["in_warehouse", "held"] },
+  });
+  const map = new Map();
+  for (const doc of docs || []) {
+    if (!map.has(doc.customerKey)) map.set(doc.customerKey, []);
+    map.get(doc.customerKey).push(doc);
+  }
+  return map;
+}
+
+/**
  * Find the record a parsed row belongs to, without merging two customers who
  * happen to share a tracking number.
  *
@@ -816,29 +840,47 @@ async function loadExistingByWaybill(items) {
  * exist because a customer can be recorded under one identifier at intake and
  * the other on the packing list — a mark on one sheet, a phone on the next —
  * which would otherwise create a second record for the same parcel.
+ *
+ * existingByCustomerKey is optional (only passed for packing-list uploads)
+ * and is only consulted when the packing list's waybill matches no existing
+ * record at all — the case where the packing list uses a different tracking
+ * number than intake for the same customer.
  */
-function matchExistingItem(item, existingByWaybill) {
+function matchExistingItem(item, existingByWaybill, existingByCustomerKey) {
   const candidates = existingByWaybill.get(item.waybillNo) || [];
-  if (!candidates.length) return null;
 
-  const exact = candidates.find((c) => c.customerKey === item.customerKey);
-  if (exact) return exact;
+  if (candidates.length) {
+    const exact = candidates.find((c) => c.customerKey === item.customerKey);
+    if (exact) return exact;
 
-  // Same customer recorded under their other identifier.
-  const alt = candidates.find(
-    (c) =>
-      (item.shippingMark  && c.shippingMark  === item.shippingMark) ||
-      (item.customerPhone && c.customerPhone === item.customerPhone)
-  );
-  if (alt) return alt;
+    // Same customer recorded under their other identifier.
+    const alt = candidates.find(
+      (c) =>
+        (item.shippingMark  && c.shippingMark  === item.shippingMark) ||
+        (item.customerPhone && c.customerPhone === item.customerPhone)
+    );
+    if (alt) return alt;
 
-  // A single record on this waybill still waiting for a phone is almost
-  // certainly this row, now that a phone has arrived. Restricted to waybills
-  // holding exactly one record — on a shared waybill there is no way to tell
-  // which customer is which, and guessing would recreate the very bug this
-  // matching exists to prevent.
-  if (item.customerPhone && candidates.length === 1 && candidates[0].needsPhone) {
-    return candidates[0];
+    // A single record on this waybill still waiting for a phone is almost
+    // certainly this row, now that a phone has arrived. Restricted to
+    // waybills holding exactly one record — on a shared waybill there is no
+    // way to tell which customer is which, and guessing would recreate the
+    // very bug this matching exists to prevent.
+    if (item.customerPhone && candidates.length === 1 && candidates[0].needsPhone) {
+      return candidates[0];
+    }
+
+    return null;
+  }
+
+  // No record shares this waybill at all. Fall back to the customer's
+  // identity — but only when it is unambiguous: exactly one in-warehouse/held
+  // record for this customerKey. More than one match means we cannot tell
+  // which parcel this row belongs to, so it is left alone (and will show up
+  // as a new record / an unclaimed leftover instead of a wrong merge).
+  if (existingByCustomerKey && item.customerKey) {
+    const byKey = existingByCustomerKey.get(item.customerKey) || [];
+    if (byKey.length === 1) return byKey[0];
   }
 
   return null;
@@ -878,6 +920,7 @@ async function processIntakeBatch(parsedData, uploadedBy, filename) {
     stage:      "intake",
     uploadedBy,
     skippedRows,
+    sourceFilename: filename || undefined,
   });
 
   let newItems     = 0;
@@ -984,9 +1027,15 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
       etd        ? `ETD: ${etd}`         : null,
       eta        ? `ETA: ${eta}`         : null,
     ].filter(Boolean).join(" | ") || undefined,
+    sourceFilename: filename || undefined,
   });
 
   const uploadedWaybills = new Set(items.map((i) => i.waybillNo));
+  // Keyed rather than phoned, so a customer present on the list under a
+  // shipping mark is recognised and left alone like any other. Used by the
+  // customerKey match fallback below, the auto-hold filter, and the
+  // leftovers review.
+  const uploadedKeys = new Set(items.map((i) => i.customerKey).filter(Boolean));
   let newItems     = 0;
   let matchedItems = 0;
 
@@ -994,13 +1043,14 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
   // list inherits it unless the row had its own expected-delivery date.
   const etaDate = safeDate(eta);
 
-  const existingByWaybill = await loadExistingByWaybill(items);
+  const existingByWaybill    = await loadExistingByWaybill(items);
+  const existingByCustomerKey = await loadExistingByCustomerKey(items);
 
   for (const item of items) {
     const customerId = await findUserByPhone(item.customerPhone);
     // Keyed on the customer as well as the waybill — matching on the waybill
     // alone overwrote the first customer's record with the second's data.
-    const found      = matchExistingItem(item, existingByWaybill);
+    const found      = matchExistingItem(item, existingByWaybill, existingByCustomerKey);
 
     if (found) {
       if (found.status === "shipped") { matchedItems++; continue; }
@@ -1048,6 +1098,19 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
         updatedAt: new Date(),
         note:      `Updated via packing list ${batchCode}`,
       });
+      // Matched via the customerKey fallback (no record shared this waybill) —
+      // the intake record's original waybillNo is kept as-is; note the
+      // mismatch so staff reviewing history understand why it differs from
+      // what's on this packing list.
+      if (found.waybillNo !== item.waybillNo) {
+        found.stageHistory.push({
+          stage:     "shipped",
+          status:    "shipped",
+          batchId:   batch._id,
+          updatedAt: new Date(),
+          note:      `Packing list ${batchCode} listed this customer under waybill ${item.waybillNo}, kept existing waybill ${found.waybillNo}`,
+        });
+      }
       await found.save();
       matchedItems++;
     } else {
@@ -1072,30 +1135,30 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
     }
   }
 
+  // Recent intake batches (90 days) not covered by this packing list — used
+  // both by the opt-in auto-hold below and by the always-on leftovers review.
+  const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
+  const recentBatchIds = recentBatches.map((b) => b._id);
+  const notOnListFilter = {
+    status:      "in_warehouse",
+    intakeBatch: { $in: recentBatchIds },
+    waybillNo:   { $nin: Array.from(uploadedWaybills) },
+    $or: [
+      { customerKey: null },
+      { customerKey: { $nin: Array.from(uploadedKeys) } },
+    ],
+  };
+
   // Auto-hold items still in_warehouse from recent intake batches not in this
   // list. This is OFF by default — a mismatched or partial packing list would
   // otherwise wrongly hold every other warehouse parcel. When enabled, an item
-  // is only held if BOTH its waybill AND its customer phone are absent from the
+  // is only held if BOTH its waybill AND its customer key are absent from the
   // list, so a customer present under a different waybill is never held.
   let heldItems = 0;
   if (autoHold) {
-    const cutoff         = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-    const recentBatches  = await Batch.find({ stage: "intake", createdAt: { $gte: cutoff } }).select("_id");
-    const recentBatchIds = recentBatches.map((b) => b._id);
-    // Keyed rather than phoned, so a customer present on the list under a
-    // shipping mark is recognised and left alone like any other.
-    const uploadedKeys = new Set(items.map((i) => i.customerKey).filter(Boolean));
-
     const heldResult = await ShipmentItem.updateMany(
-      {
-        status:      "in_warehouse",
-        intakeBatch: { $in: recentBatchIds },
-        waybillNo:   { $nin: Array.from(uploadedWaybills) },
-        $or: [
-          { customerKey: null },
-          { customerKey: { $nin: Array.from(uploadedKeys) } },
-        ],
-      },
+      notOnListFilter,
       {
         $set:  { status: "held", heldReason: `Not included in packing list ${batchCode}` },
         $push: {
@@ -1112,8 +1175,28 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
     heldItems = heldResult.modifiedCount;
   }
 
+  // Read-only leftovers review: recent intake parcels this packing list did
+  // not claim, so staff can see and act on them instead of them silently
+  // sitting in_warehouse forever. Always computed (autoHold or not) and
+  // changes nothing by itself.
+  const leftoverDocs = await ShipmentItem.find(notOnListFilter)
+    .select("waybillNo customerName customerKey")
+    .lean();
+  const leftoverCount = await ShipmentItem.countDocuments(notOnListFilter);
+  const leftovers = {
+    count:  leftoverCount,
+    sample: leftoverDocs.slice(0, 20).map((d) => ({
+      waybillNo:    d.waybillNo,
+      customerName: d.customerName,
+      customerKey:  d.customerKey,
+    })),
+  };
+
   const totalItems = newItems + matchedItems;
-  await Batch.findByIdAndUpdate(batch._id, { totalItems, newItems, matchedItems, heldItems });
+  await Batch.findByIdAndUpdate(batch._id, {
+    totalItems, newItems, matchedItems, heldItems,
+    unclaimedIntake: leftoverCount,
+  });
 
   if (containerNumber) {
     const containerData = {
@@ -1141,6 +1224,7 @@ async function processShippedBatch(parsedData, uploadedBy, options = {}) {
   return {
     batch:      await Batch.findById(batch._id),
     skippedRows,
+    leftovers,
     summary:    `${totalItems} items processed. ${newItems} new, ${matchedItems} updated, ${heldItems} held.`,
   };
 }

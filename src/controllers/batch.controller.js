@@ -33,6 +33,14 @@ const { respond } = require("../utils/response");
 const PUBLIC_ITEM_SELECT =
   "-staffNotes -customerId -heldReason -reassignedTo -stageHistory";
 
+// Parses a status query param that may be a single value or a comma-separated
+// list (e.g. "in_warehouse,held" for the Goods Received view) into a Mongo
+// filter value.
+function parseStatusFilter(status) {
+  const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
+  return statuses.length > 1 ? { $in: statuses } : statuses[0];
+}
+
 // ─── File validation ──────────────────────────────────────────────────────────
 
 function validateFile(req, res) {
@@ -118,7 +126,7 @@ async function uploadArrived(req, res, next) {
   let batch;
   try {
     const parsed = parseArrivedSheet(req.file.buffer);
-    const result = await processArrivedBatch(parsed, req.user._id);
+    const result = await processArrivedBatch(parsed, req.user._id, req.file.originalname);
     batch = result.batch;
     await audit.log({
       performedBy: req.user._id,
@@ -233,7 +241,17 @@ async function listBatches(req, res, next) {
     if (stage) filter.stage = stage;
     if (search) {
       const esc = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      filter.batchCode = { $regex: esc, $options: "i" };
+      const rx  = { $regex: esc, $options: "i" };
+      // batchCode is a derived code staff rarely know — also match the
+      // original filename, label/notes, and any container number on the
+      // batch, so an old upload can actually be found.
+      filter.$or = [
+        { batchCode:            rx },
+        { label:                rx },
+        { notes:                rx },
+        { sourceFilename:       rx },
+        { "containerRefs.id":   rx },
+      ];
     }
 
     const [batches, total] = await Promise.all([
@@ -282,7 +300,9 @@ async function getBatchItems(req, res, next) {
 
     const stageField = `${batch.stage}Batch`;
     const filter     = { [stageField]: batch._id };
-    if (status) filter.status = status;
+    // status may be a single value or a comma-separated list (e.g.
+    // "in_warehouse,held" for the Goods Received view).
+    if (status) filter.status = parseStatusFilter(status);
 
     const [items, total] = await Promise.all([
       ShipmentItem.find(filter)
@@ -314,10 +334,7 @@ async function listAllItems(req, res, next) {
 
     // status may be a single value or a comma-separated list (e.g.
     // "in_warehouse,held" for the Goods Received list).
-    if (status) {
-      const statuses = String(status).split(",").map((s) => s.trim()).filter(Boolean);
-      filter.status = statuses.length > 1 ? { $in: statuses } : statuses[0];
-    }
+    if (status) filter.status = parseStatusFilter(status);
 
     if (phone) {
       const norm = normalisePhone(phone);
