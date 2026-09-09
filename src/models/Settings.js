@@ -1,5 +1,14 @@
 const mongoose = require("mongoose");
 
+const tickerItemSchema = new mongoose.Schema(
+    {
+        id:   { type: String, required: true },
+        type: { type: String, enum: ["news", "rate"], default: "news" },
+        text: { type: String, required: true, trim: true, maxlength: 300 },
+    },
+    { _id: false }
+);
+
 // ─── Location → rate-group resolution ──────────────────────────────────────────
 //
 // The CBM ("CDM") rate charged to a customer depends on the delivery location
@@ -35,17 +44,7 @@ const settingsSchema = new mongoose.Schema(
         // News ticker shown on the public site navbar. Persisted server-side
         // (previously lived only in the admin's own browser localStorage,
         // which is why edits never reached other visitors).
-        tickerItems: {
-            type: [
-                {
-                    id:   { type: String, required: true },
-                    type: { type: String, enum: ["news", "rate"], default: "news" },
-                    text: { type: String, required: true, trim: true, maxlength: 300 },
-                },
-            ],
-            default: [],
-            _id: false,
-        },
+        tickerItems: { type: [tickerItemSchema], default: [] },
     },
     { timestamps: true }
 );
