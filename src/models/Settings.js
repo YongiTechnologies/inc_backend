@@ -31,6 +31,21 @@ const settingsSchema = new mongoose.Schema(
 
         usdToGhsRate: { type: Number, default: 15.2 },
         minFeeUsd: { type: Number, default: 3 },
+
+        // News ticker shown on the public site navbar. Persisted server-side
+        // (previously lived only in the admin's own browser localStorage,
+        // which is why edits never reached other visitors).
+        tickerItems: {
+            type: [
+                {
+                    id:   { type: String, required: true },
+                    type: { type: String, enum: ["news", "rate"], default: "news" },
+                    text: { type: String, required: true, trim: true, maxlength: 300 },
+                },
+            ],
+            default: [],
+            _id: false,
+        },
     },
     { timestamps: true }
 );
