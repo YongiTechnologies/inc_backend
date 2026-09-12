@@ -17,7 +17,25 @@ const { respond }      = require("../utils/response");
 const { buildObservations } = require("../services/observations");
 const ingest           = require("../services/ingest.service");
 const audit            = require("../services/audit.service");
-const { normalisePhone } = require("../services/batch.service");
+const { normalisePhone, normaliseMark, maskName, maskPhone, maskMark } = require("../services/batch.service");
+
+// Public-safe projection of a parcel — the journey and cargo, none of the
+// internal/staff or cross-customer fields (phone, mark, notes, financials).
+function sanitizePublicParcel(p) {
+  return {
+    waybill:      p.waybill,
+    currentStage: p.currentStage,
+    status:       p.status,
+    customerName: p.customerName || null,
+    receivedDate: p.receivedDate || null,
+    intake:  p.intake  ? { date: p.intake.date,  warehouse: p.intake.warehouse } : null,
+    loading: p.loading ? { containerNo: p.loading.containerNo, loadingDate: p.loading.loadingDate, etd: p.loading.etd, eta: p.loading.eta, location: p.loading.location, cbm: p.loading.cbm ?? null } : null,
+    arrival: p.arrival ? { date: p.arrival.date, containerNo: p.arrival.containerNo } : null,
+    qty:      p.qty ?? null,
+    cbm:      (p.loading && p.loading.cbm != null) ? p.loading.cbm : null,
+    productDescription: p.productDescription || null,
+  };
+}
 
 function validateFile(req, res) {
   if (!req.file) { respond(res, 400, false, "No file uploaded. Use multipart field name 'file'."); return false; }
@@ -272,7 +290,64 @@ async function myParcels(req, res, next) {
     if (req.user.phone) or.push({ customerPhone: normalisePhone(req.user.phone) });
     if (!or.length) return respond(res, 200, true, "No parcels", { total: 0, parcels: [] });
     const parcels = await Parcel.find({ $or: or }).sort({ updatedAt: -1 }).lean();
-    return respond(res, 200, true, "Your parcels", { total: parcels.length, parcels });
+    return respond(res, 200, true, "Your parcels", { total: parcels.length, parcels: parcels.map(sanitizePublicParcel) });
+  } catch (err) { next(err); }
+}
+
+// ─── Public tracking (no auth) ────────────────────────────────────────────────
+
+/** All parcels for a phone number, grouped by stage. */
+async function publicTrackByPhone(req, res, next) {
+  try {
+    const normalised = normalisePhone(req.params.phone);
+    if (!normalised) return respond(res, 400, false, "Invalid phone number.");
+    const parcels = await Parcel.find({ customerPhone: normalised }).sort({ updatedAt: -1 }).lean();
+    if (!parcels.length) return respond(res, 404, false, "No parcels found for this phone number.");
+    const grouped = {};
+    for (const p of parcels) (grouped[p.currentStage] = grouped[p.currentStage] || []).push(sanitizePublicParcel(p));
+    return respond(res, 200, true, "Parcels retrieved", { total: parcels.length, grouped, parcels: parcels.map(sanitizePublicParcel) });
+  } catch (err) { next(err); }
+}
+
+/** All parcels for a shipping mark. */
+async function publicTrackByMark(req, res, next) {
+  try {
+    const mark = normaliseMark(req.params.mark);
+    if (!mark) return respond(res, 400, false, "Invalid shipping mark.");
+    const parcels = await Parcel.find({ shippingMark: mark }).sort({ updatedAt: -1 }).lean();
+    if (!parcels.length) return respond(res, 404, false, "No parcels found for this shipping mark.");
+    return respond(res, 200, true, "Parcels retrieved", { total: parcels.length, parcels: parcels.map(sanitizePublicParcel) });
+  } catch (err) { next(err); }
+}
+
+/**
+ * A tracking number's parcel(s). A consolidated number carries several
+ * customers, so without a phone/mark to narrow it we return masked choices
+ * rather than expose one customer's shipment to whoever has the number.
+ */
+async function publicTrackByWaybill(req, res, next) {
+  try {
+    const waybill = String(req.params.waybill).trim().toUpperCase();
+    let parcels = await Parcel.find({ waybill }).lean();
+    if (!parcels.length) return respond(res, 404, false, "Tracking number not found.");
+
+    const np = req.query.phone ? normalisePhone(req.query.phone) : null;
+    const nm = req.query.mark ? normaliseMark(req.query.mark) : null;
+
+    if (np || nm) {
+      const narrowed = parcels.filter((p) => (np && p.customerPhone === np) || (nm && p.shippingMark === nm));
+      if (!narrowed.length) return respond(res, 404, false, "That phone number or shipping mark does not match any shipment on this tracking number.");
+      parcels = narrowed;
+    } else if (parcels.length > 1) {
+      const choices = parcels.map((p) => ({ name: maskName(p.customerName), phone: maskPhone(p.customerPhone), mark: maskMark(p.shippingMark) }));
+      return respond(res, 200, true,
+        `This tracking number covers ${parcels.length} shipments. Enter your phone number or shipping mark to see yours.`,
+        { ambiguous: true, total: parcels.length, choices, parcels: [] });
+    }
+
+    return respond(res, 200, true, "Tracking info retrieved", {
+      ambiguous: false, total: parcels.length, parcels: parcels.map(sanitizePublicParcel),
+    });
   } catch (err) { next(err); }
 }
 
@@ -281,4 +356,5 @@ module.exports = {
   listParcels, getByWaybill, reconciliation,
   listContainers, getContainer,
   adjustParcel, myParcels,
+  publicTrackByPhone, publicTrackByMark, publicTrackByWaybill,
 };
