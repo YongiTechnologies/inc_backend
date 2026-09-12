@@ -23,6 +23,7 @@ const observationSchema = new mongoose.Schema(
 
     // ── identity ────────────────────────────────────────────────────────────
     waybill:        { type: String, index: true },
+    contactRaw:     { type: String },   // the CONTACT cell exactly as written
     customerPhone:  { type: String },
     shippingMark:   { type: String },
     customerName:   { type: String },
@@ -36,6 +37,8 @@ const observationSchema = new mongoose.Schema(
     // ── cargo ─────────────────────────────────────────────────────────────────
     qty:            { type: Number },
     qtyRaw:         { type: String },
+    qtyUnit:        { type: String },  // "pallet", "carton", "pieces" …
+    kg:             { type: Number },  // gross weight (intake sheets)
     cbm:            { type: Number },
     invoiceNo:      { type: String },
     location:       { type: String },

@@ -206,6 +206,7 @@ function foldParcel(group) {
     warehouse: pick(byStage.intake, "warehouse"),
     qty:       intakeQty,
     qtyRaw:    pick(byStage.intake, "qtyRaw"),
+    kg:        pick(byStage.intake, "kg"),
     srcRow:    byStage.intake[byStage.intake.length - 1].srcRow,
     fileHash:  byStage.intake[byStage.intake.length - 1].fileHash,
   } : null;
