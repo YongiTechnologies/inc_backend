@@ -159,7 +159,7 @@ async function listParcels(req, res, next) {
     }
     const skip = (Number(page) - 1) * Number(limit);
     const [parcels, total] = await Promise.all([
-      Parcel.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(Math.min(Number(limit), 100)).lean(),
+      Parcel.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(Math.min(Number(limit), 2000)).lean(),
       Parcel.countDocuments(filter),
     ]);
     return respond(res, 200, true, "Parcels retrieved", { total, page: Number(page), parcels });
