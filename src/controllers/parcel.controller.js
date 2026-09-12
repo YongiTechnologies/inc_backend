@@ -29,9 +29,10 @@ function sanitizePublicParcel(p) {
     customerName: p.customerName || null,
     receivedDate: p.receivedDate || null,
     intake:  p.intake  ? { date: p.intake.date,  warehouse: p.intake.warehouse } : null,
-    loading: p.loading ? { containerNo: p.loading.containerNo, loadingDate: p.loading.loadingDate, etd: p.loading.etd, eta: p.loading.eta, location: p.loading.location } : null,
+    loading: p.loading ? { containerNo: p.loading.containerNo, loadingDate: p.loading.loadingDate, etd: p.loading.etd, eta: p.loading.eta, location: p.loading.location, cbm: p.loading.cbm ?? null } : null,
     arrival: p.arrival ? { date: p.arrival.date, containerNo: p.arrival.containerNo } : null,
     qty:      p.qty ?? null,
+    cbm:      (p.loading && p.loading.cbm != null) ? p.loading.cbm : null,
     productDescription: p.productDescription || null,
   };
 }
