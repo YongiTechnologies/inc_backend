@@ -30,8 +30,11 @@ userSchema.pre("save", async function (next) {
     this.password = await bcrypt.hash(this.password, 12);
   }
 
-  // Enforce password requirement for local users
-  if (this.provider === "local" && !this.password) {
+  // Enforce a password only when it's actually being decided — creating a local
+  // user, or switching an account to local auth. On ordinary updates the
+  // password field is often not loaded (select:false), so checking it here would
+  // wrongly reject e.g. a customer linking their phone number.
+  if ((this.isNew || this.isModified("provider")) && this.provider === "local" && !this.password) {
     return next(new Error("Password required for local authentication"));
   }
 
