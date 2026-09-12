@@ -196,11 +196,27 @@ async function listContainers(req, res, next) {
           etd:         { $first: "$loading.etd" },
           eta:         { $first: "$loading.eta" },
           arrived:     { $sum: { $cond: [{ $eq: ["$currentStage", "arrival"] }, 1, 0] } },
+          // Distinct receiving days the container drew from (the fan-in).
+          receivingDays: { $addToSet: {
+            $cond: [
+              { $ne: ["$receivedDate", null] },
+              { $dateToString: { format: "%Y-%m-%d", date: "$receivedDate" } },
+              "$$REMOVE",
+            ],
+          } },
       } },
       { $sort: { loadingDate: -1 } },
     ]);
     return respond(res, 200, true, "Containers retrieved", {
-      containers: rows.map((r) => ({ containerNo: r._id, ...r, _id: undefined })),
+      containers: rows.map((r) => ({
+        containerNo: r._id,
+        parcels: r.parcels,
+        loadingDate: r.loadingDate,
+        etd: r.etd,
+        eta: r.eta,
+        arrived: r.arrived,
+        spansReceivingDays: (r.receivingDays || []).sort(),
+      })),
     });
   } catch (err) { next(err); }
 }
