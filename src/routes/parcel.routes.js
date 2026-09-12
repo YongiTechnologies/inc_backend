@@ -29,6 +29,13 @@ const uploadLimiter = rateLimit({
 const staffOnly    = [authenticate, authorize("admin", "employee")];
 const customerOnly = [authenticate, authorize("customer")];
 
+// Public tracking is unauthenticated; rate-limit to blunt scraping.
+const publicLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max:      30,
+  message:  { success: false, message: "Too many requests. Please wait a moment." },
+});
+
 // ─── Uploads (Layer 1) ────────────────────────────────────────────────────────
 router.post("/v2/uploads/validate", ...staffOnly, uploadLimiter, upload.single("file"), ctrl.validateUpload);
 router.post("/v2/uploads",          ...staffOnly, uploadLimiter, upload.single("file"), ctrl.upload);
@@ -45,5 +52,10 @@ router.patch("/v2/parcels/:waybill/:customerKey", ...staffOnly, ctrl.adjustParce
 // ─── Containers ─────────────────────────────────────────────────────────────
 router.get("/v2/containers",              ...staffOnly, ctrl.listContainers);
 router.get("/v2/containers/:containerNo", ...staffOnly, ctrl.getContainer);
+
+// ─── Public tracking (no auth) ────────────────────────────────────────────────
+router.get("/v2/track/phone/:phone",     publicLimiter, ctrl.publicTrackByPhone);
+router.get("/v2/track/mark/:mark",       publicLimiter, ctrl.publicTrackByMark);
+router.get("/v2/track/waybill/:waybill", publicLimiter, ctrl.publicTrackByWaybill);
 
 module.exports = router;
