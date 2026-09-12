@@ -10,6 +10,7 @@
     "seed": "node src/scripts/seed.js",
     "migrate-shipments": "node src/scripts/migrate-shipments-to-items.js",
     "backfill-customer-key": "node src/scripts/backfill-customer-key.js",
+    "migrate-to-parcels": "node src/scripts/migrate-to-parcels.js",
     "create-admin": "node src/scripts/create-admin.js"
   },
   "dependencies": {

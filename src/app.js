@@ -16,6 +16,7 @@ const dashboardRoutes = require("./routes/dashboard.routes");
 const contactRoutes   = require("./routes/contact.routes");
 const oauthRoutes     = require("./routes/oauth.routes");
 const batchRoutes         = require("./routes/batch.routes");
+const parcelRoutes        = require("./routes/parcel.routes");
 const containerRoutes     = require("./routes/container.routes");
 const settingsRoutes      = require("./routes/settings.routes");
 const { errorHandler } = require("./middleware/errorHandler");
@@ -113,6 +114,7 @@ app.use("/api/employee", employeeRoutes);
 app.use("/api/dashboard",dashboardRoutes);
 app.use("/api",          contactRoutes);
 app.use("/api",          batchRoutes);
+app.use("/api",          parcelRoutes);
 app.use("/api",          containerRoutes);
 app.use("/api",          settingsRoutes);
 
