@@ -378,6 +378,7 @@ function parseContainerListRows(rows, det) {
         containerRef,
         remarks,
         intakeDate:         receivedAt,
+        srcRow:             i + 1,
       });
     }
   }
@@ -551,6 +552,7 @@ function parseUnifiedSheet(buffer) {
           quantity:         qty,
           quantityRaw:      qtyRaw !== null ? String(qtyRaw).trim() : null,
           intakeDate:       date,
+          srcRow:           i + 1,
         });
       }
     }
@@ -653,6 +655,7 @@ function parseUnifiedSheet(buffer) {
           // ETA — only a per-item column value here; the container ETA is applied
           // as a fallback in processShippedBatch.
           estimatedDelivery:  expectedParsed || null,
+          srcRow:             i + 1,
         };
         if (stage === "intake") {
           item.invoiceNo  = invoiceRaw ? String(invoiceRaw).trim() : null;
