@@ -37,6 +37,16 @@ describe("observation emitter", () => {
     expect(multi.length).toBeGreaterThan(0);
   });
 
+  test("qtyUnit is parsed from the raw quantity, and contactRaw is preserved", () => {
+    // The sheets carry values like "7PALLET" / "1pallet+1".
+    const pallets = ALL_OBS.filter((o) => o.qtyUnit === "pallet");
+    expect(pallets.length).toBeGreaterThan(0);
+    // A plain numeric quantity resolves to "pieces".
+    expect(ALL_OBS.some((o) => o.qtyUnit === "pieces")).toBe(true);
+    // The original CONTACT cell is retained verbatim on most rows.
+    expect(ALL_OBS.filter((o) => o.contactRaw).length).toBeGreaterThan(ALL_OBS.length * 0.8);
+  });
+
   test("loading observations carry a received-at-warehouse date spanning many days", () => {
     const days = new Set(
       N200.observations

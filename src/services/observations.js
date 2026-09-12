@@ -101,6 +101,7 @@ function buildObservations(buffer, opts = {}) {
 
       // ── identity ────────────────────────────────────────────────────────
       waybill:       item.waybillNo || null,
+      contactRaw:    item.contactRaw || item.customerPhoneRaw || item.shippingMarkRaw || null,
       customerPhone: item.customerPhone || null,
       shippingMark:  item.shippingMark || null,
       customerName:  item.customerName || null,
@@ -115,6 +116,8 @@ function buildObservations(buffer, opts = {}) {
       // ── cargo ───────────────────────────────────────────────────────────
       qty:          item.quantity ?? null,
       qtyRaw:       item.quantityRaw || null,
+      qtyUnit:      item.quantityUnit || null,
+      kg:           item.kg ?? null,
       cbm:          item.cbm ?? null,
       invoiceNo:    item.invoiceNo || null,
       location:     item.destinationCity || null,

@@ -12,7 +12,7 @@ const mongoose = require("mongoose");
  * from files never wipes them.
  */
 const stageIntakeSchema = new mongoose.Schema(
-  { date: Date, warehouse: String, qty: Number, qtyRaw: String, srcRow: Number, fileHash: String },
+  { date: Date, warehouse: String, qty: Number, qtyRaw: String, kg: Number, srcRow: Number, fileHash: String },
   { _id: false }
 );
 const stageLoadingSchema = new mongoose.Schema(

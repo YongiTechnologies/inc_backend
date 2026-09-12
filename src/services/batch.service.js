@@ -111,6 +111,15 @@ function parseQuantity(raw) {
   return match ? parseFloat(match[1]) : null;
 }
 
+// The unit written alongside a quantity, if any: "7PALLET" → "pallet",
+// "1pallet+1" → "pallet", "3 CARTONS" → "carton". Plain numbers → "pieces".
+function parseQtyUnit(raw) {
+  if (raw === null || raw === undefined) return null;
+  const m = String(raw).toLowerCase().match(/[a-z]+/);
+  if (!m) return "pieces";
+  return m[0].replace(/s$/, ""); // singularise: pallets → pallet
+}
+
 function splitWaybills(raw) {
   if (!raw) return [];
   return String(raw)
@@ -176,6 +185,7 @@ const COLUMN_ALIASES = {
   CBM:            ["CBM", "CBM PER TRACKING", "C.B.M", "CBM (M3)", "C.B.M PER TRACKING", "CBM PER TRACKING NO", "CBM PER TRACKING NO.", "CBM PER TRACKING NUMBER", "VOLUME (CBM)", "VOLUME CBM", "CBM VOLUME", "TOTAL CBM", "CBM TOTAL"],
   CONTACT:        ["CONTACT", "PHONE", "PHONE NUMBER", "CUSTOMER NO", "CUSTOMER NUMBER"],
   QTY:            ["QTY PER TRACKING", "QUANTITY", "QTY"],
+  KG:             ["KG", "KGS", "WEIGHT", "WEIGHT (KG)", "GROSS WEIGHT", "GW"],
   GOODS_TYPE:     ["GOODS TYPE", "GOODS"],
   PRODUCT_DESC:   ["PRODUCT DESCRIPTION", "DESCRIPTION"],
   CUSTOMER_NAME:  ["CUSTOMER NAME", "CNEE NAME", "CNEE"],
@@ -605,6 +615,8 @@ function parseUnifiedSheet(buffer) {
       const qty         = parseQuantity(qtyRaw);
       const cbmRaw      = get(row, "CBM");
       const cbm         = (cbmRaw !== null && cbmRaw !== undefined) ? parseFloat(cbmRaw) : null;
+      const kgRaw       = get(row, "KG");
+      const kg          = (kgRaw !== null && kgRaw !== undefined) ? parseFloat(kgRaw) : null;
       // Received-at-warehouse date (col "RECEIVING DATE") vs per-item ETA
       // ("EXPECTED DELIVERY") — kept as two distinct dates.
       const receivedRaw    = get(row, "RECEIVED_DATE");
@@ -630,16 +642,20 @@ function parseUnifiedSheet(buffer) {
       const cbmVal  = (cbm !== null && !isNaN(cbm)) ? cbm : null;
 
       for (const waybill of waybills) {
+        const kgVal = (kg !== null && !isNaN(kg)) ? kg : null;
         const item = {
           waybillNo:          waybill,
           ...contact,
+          contactRaw:         phoneRaw != null ? String(phoneRaw).trim() : null,
           customerKey,
           customerName:       cneeStr || null,
           destinationCity:    location,
           goodsType,
           quantity:           per(qty),
           quantityRaw:        qtyRaw !== null ? String(qtyRaw).trim() : null,
+          quantityUnit:       parseQtyUnit(qtyRaw),
           cbm:                per(cbmVal),
+          kg:                 per(kgVal),
           productDescription: description || goodsType,
           containerRef,
           remarks,
