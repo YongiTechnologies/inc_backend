@@ -79,6 +79,10 @@ async function login(req, res, next) {
 
     return respond(res, 200, true, "Login successful", {
       accessToken,
+      // Also returned in the body (not only the httpOnly cookie) so the client
+      // can refresh when the cookie is unavailable — e.g. the API is on a
+      // different site to the app and the browser drops third-party cookies.
+      refreshToken,
       user: { id: user._id, name: user.name, email: user.email, role: user.role },
     });
   } catch (err) { next(err); }
@@ -149,7 +153,9 @@ async function resetPassword(req, res, next) {
 
 async function refresh(req, res, next) {
   try {
-    const token = req.cookies?.refreshToken;
+    // Prefer the httpOnly cookie; fall back to a token in the body for browsers
+    // that drop the cross-site cookie (third-party cookie blocking).
+    const token = req.cookies?.refreshToken || req.body?.refreshToken;
     if (!token) return respond(res, 401, false, "No refresh token");
 
     const decoded = verifyRefresh(token);
@@ -192,7 +198,7 @@ async function refresh(req, res, next) {
 }
 
 async function logout(req, res) {
-  const token = req.cookies?.refreshToken;
+  const token = req.cookies?.refreshToken || req.body?.refreshToken;
   if (token) {
     // Revoke the refresh token
     await RefreshToken.findOneAndUpdate(

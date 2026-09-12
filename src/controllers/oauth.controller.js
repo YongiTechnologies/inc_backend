@@ -42,9 +42,11 @@ async function googleCallback(req, res, next) {
       ip: req.ip
     });
 
-    // Redirect to frontend with access token as query param
+    // Redirect to frontend with the tokens as query params. The refresh token
+    // rides along (as well as the httpOnly cookie) so sign-in survives browsers
+    // that drop the cross-site cookie; the callback stores it and clears the URL.
     const frontendURL = process.env.FRONTEND_URL || "http://localhost:3000";
-    res.redirect(`${frontendURL}/auth/google/callback?token=${accessToken}&role=${user.role}`);
+    res.redirect(`${frontendURL}/auth/google/callback?token=${accessToken}&rt=${refreshToken}&role=${user.role}`);
 
   } catch (err) {
     next(err);
