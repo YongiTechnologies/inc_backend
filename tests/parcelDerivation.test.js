@@ -88,10 +88,10 @@ describe("partitionByCustomer", () => {
 });
 
 describe("foldParcel via deriveParcels", () => {
-  test("intake only → in_warehouse, receivedNotLoaded", () => {
+  test("intake only → received, receivedNotLoaded", () => {
     const [p] = deriveParcels([ob({ stage: "intake", customerPhone: "233111", eventDate: new Date("2026-07-24") })]);
     expect(p.currentStage).toBe("intake");
-    expect(p.status).toBe("in_warehouse");
+    expect(p.status).toBe("received");
     expect(p.flags.receivedNotLoaded).toBe(true);
     expect(p.flags.loadedNeverReceived).toBe(false);
   });

@@ -20,7 +20,7 @@ const Parcel           = require("../models/Parcel");
 const ManualAdjustment = require("../models/ManualAdjustment");
 const User             = require("../models/User");
 const { buildObservations } = require("./observations");
-const { deriveParcels }     = require("./parcelDerivation");
+const { deriveParcels, statusRank } = require("./parcelDerivation");
 
 class DuplicateFileError extends Error {
   constructor(sourceFile) {
@@ -44,7 +44,14 @@ async function resolveCustomerId(phone) {
 function applyAdjustment(parcel, adj) {
   if (!adj) return;
   if (adj.customerPhone) { parcel.customerPhone = adj.customerPhone; parcel.flags.needsPhone = false; }
-  if (adj.statusOverride) parcel.status = adj.statusOverride;
+  // Furthest-wins: a manual status only moves a parcel FORWARD in the lifecycle,
+  // so a staff advance is never regressed by a later sheet, and a sheet that
+  // implies a further stage is never regressed by an older manual status.
+  if (adj.statusOverride) {
+    const cur = statusRank(parcel.status);
+    const next = statusRank(adj.statusOverride);
+    if (next >= 0 && (cur < 0 || next > cur)) parcel.status = adj.statusOverride;
+  }
   for (const f of ["heldReason", "assignedTo", "staffNotes", "specialInstructions",
                    "deliveryPhoto", "deliverySignature", "deliveredAt"]) {
     if (adj[f] != null) parcel[f] = adj[f];
@@ -157,6 +164,21 @@ async function revertFile(fileHash) {
   return { reverted: fileHash, ...recon };
 }
 
+/**
+ * Set one status on many parcels at once (e.g. a whole receiving-day group).
+ * Records a manual adjustment per parcel, then re-derives each affected waybill.
+ */
+async function applyBulkStatus(items, status, createdBy) {
+  const docs = (items || [])
+    .filter((it) => it && it.waybill && it.customerKey)
+    .map((it) => ({ waybill: String(it.waybill).toUpperCase(), customerKey: it.customerKey, statusOverride: status, createdBy }));
+  if (!docs.length) return { updated: 0, waybills: 0 };
+  await ManualAdjustment.insertMany(docs);
+  const waybills = [...new Set(docs.map((d) => d.waybill))];
+  await rederiveWaybills(waybills);
+  return { updated: docs.length, waybills: waybills.length };
+}
+
 /** Record a staff adjustment and re-derive the one affected waybill. */
 async function applyManualAdjustment(data) {
   const { waybill, customerKey } = data;
@@ -189,6 +211,7 @@ module.exports = {
   rederiveWaybills,
   revertFile,
   applyManualAdjustment,
+  applyBulkStatus,
   rebuildAll,
   resolveCustomerId,
   applyAdjustment,

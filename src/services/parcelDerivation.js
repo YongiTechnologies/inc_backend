@@ -19,7 +19,18 @@
  */
 
 const STAGE_RANK = { intake: 1, loading: 2, arrival: 3 };
-const STAGE_STATUS = { intake: "in_warehouse", loading: "shipped", arrival: "arrived" };
+
+// The manual status lifecycle, in order. A parcel's derived base status comes
+// from the furthest sheet it appears on; staff can advance it further by hand
+// (loaded, ready for pickup, delivered). Effective status is the furthest of
+// the two — see applyAdjustment in ingest.service.
+const STATUS_ORDER = ["received", "loaded", "shipped", "at_port", "ready_for_pickup", "delivered"];
+const STAGE_STATUS = { intake: "received", loading: "shipped", arrival: "at_port" };
+
+/** Position of a status in the lifecycle, or -1 if unknown. */
+function statusRank(s) {
+  return STATUS_ORDER.indexOf(s);
+}
 
 function normalizeName(name) {
   return name ? String(name).toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
@@ -309,4 +320,6 @@ module.exports = {
   normalizeName,
   STAGE_RANK,
   STAGE_STATUS,
+  STATUS_ORDER,
+  statusRank,
 };
