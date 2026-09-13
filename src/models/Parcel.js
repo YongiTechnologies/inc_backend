@@ -38,7 +38,7 @@ const parcelSchema = new mongoose.Schema(
     currentStage: { type: String, enum: ["intake", "loading", "arrival"], default: "intake", index: true },
     // Kept compatible with the existing ShipmentItem status vocabulary so the
     // frontend and container lifecycle keep working during/after cutover.
-    status:       { type: String, default: "in_warehouse", index: true },
+    status:       { type: String, default: "received", index: true },
 
     receivedDate: { type: Date },
 

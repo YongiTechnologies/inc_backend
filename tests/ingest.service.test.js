@@ -144,4 +144,18 @@ describe("ingest.service", () => {
     expect(mockParcel._docs.some((p) => p.currentStage === "loading" && p.loading)).toBe(false);
     expect(mockParcel._docs.filter((p) => p.flags.receivedNotLoaded).length).toBeGreaterThan(0);
   });
+
+  test("bulk status advances a parcel and survives re-derivation (furthest wins)", async () => {
+    await ingest.ingestFile(buf(GR31), { filename: GR31 });
+    await ingest.ingestFile(buf(N201), { filename: N201 });
+    const p0 = mockParcel._docs.find((x) => x.currentStage === "loading");
+    expect(p0.status).toBe("shipped"); // derived base
+
+    await ingest.applyBulkStatus([{ waybill: p0.waybill, customerKey: p0.customerKey }], "ready_for_pickup");
+    const find = () => mockParcel._docs.find((x) => x.waybill === p0.waybill && x.customerKey === p0.customerKey);
+    expect(find().status).toBe("ready_for_pickup");
+
+    await ingest.rederiveWaybills([p0.waybill]);
+    expect(find().status).toBe("ready_for_pickup"); // not regressed to the derived base
+  });
 });

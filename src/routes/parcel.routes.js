@@ -47,6 +47,7 @@ router.get("/v2/reconciliation",    ...staffOnly, ctrl.reconciliation);
 router.get("/v2/parcels/mine",      ...customerOnly, ctrl.myParcels);
 router.get("/v2/parcels",           ...staffOnly, ctrl.listParcels);
 router.get("/v2/parcels/:waybill",  ...staffOnly, ctrl.getByWaybill);
+router.post("/v2/parcels/bulk-status", ...staffOnly, ctrl.bulkAdjustStatus);
 router.patch("/v2/parcels/:waybill/:customerKey", ...staffOnly, ctrl.adjustParcel);
 
 // ─── Containers ─────────────────────────────────────────────────────────────

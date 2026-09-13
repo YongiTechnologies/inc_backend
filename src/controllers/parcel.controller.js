@@ -18,6 +18,7 @@ const { buildObservations } = require("../services/observations");
 const ingest           = require("../services/ingest.service");
 const audit            = require("../services/audit.service");
 const { normalisePhone, normaliseMark, maskName, maskPhone, maskMark } = require("../services/batch.service");
+const { STATUS_ORDER } = require("../services/parcelDerivation");
 
 // Public-safe projection of a parcel — the journey and cargo, none of the
 // internal/staff or cross-customer fields (phone, mark, notes, financials).
@@ -281,6 +282,24 @@ async function adjustParcel(req, res, next) {
   }
 }
 
+/** Set one status on many parcels at once (bulk — e.g. a whole date group). */
+async function bulkAdjustStatus(req, res, next) {
+  try {
+    const { items, status } = req.body;
+    if (!Array.isArray(items) || !items.length) return respond(res, 400, false, "items is required (a non-empty array).");
+    if (!status || !STATUS_ORDER.includes(status)) {
+      return respond(res, 400, false, `status must be one of: ${STATUS_ORDER.join(", ")}`);
+    }
+    const result = await ingest.applyBulkStatus(items, status, req.user._id);
+    await audit.log({
+      performedBy: req.user._id, action: "PARCEL_BULK_STATUS",
+      targetModel: "ManualAdjustment",
+      details: { status, count: result.updated }, ip: req.ip,
+    }).catch(() => {});
+    return respond(res, 200, true, `${result.updated} parcels set to ${status}`, result);
+  } catch (err) { next(err); }
+}
+
 // ─── Customer self-service ────────────────────────────────────────────────────
 
 async function myParcels(req, res, next) {
@@ -355,6 +374,6 @@ module.exports = {
   validateUpload, upload, revertUpload, listUploads,
   listParcels, getByWaybill, reconciliation,
   listContainers, getContainer,
-  adjustParcel, myParcels,
+  adjustParcel, bulkAdjustStatus, myParcels,
   publicTrackByPhone, publicTrackByMark, publicTrackByWaybill,
 };
