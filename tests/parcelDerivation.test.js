@@ -126,6 +126,108 @@ describe("foldParcel via deriveParcels", () => {
   });
 });
 
+describe("multi-line-item aggregation", () => {
+  test("same receipt re-listed on two overlapping sheets folds to ONE line (no double-count)", () => {
+    const obs = [
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 1, qtyRaw: "1", eventDate: new Date("2026-07-18"), fileHash: "A", srcRow: 287 }),
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 1, qtyRaw: "1", eventDate: new Date("2026-07-18"), fileHash: "B", srcRow: 287 }), // different sheet, same content
+    ];
+    const [p] = deriveParcels(obs);
+    expect(p.intake.lines.length).toBe(1);
+    expect(p.intake.qty).toBe(1);
+    expect(p.qty).toBe(1);
+  });
+
+  test("two distinct receipts SUM and surface as two lines (the 19897625171 case)", () => {
+    const obs = [
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233277411199", qty: 3, qtyRaw: "3PALLTE", qtyUnit: "pallte", eventDate: new Date("2026-08-07") }),
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233277411199", qty: 4, qtyRaw: "4", qtyUnit: "pieces", eventDate: new Date("2026-08-10") }),
+    ];
+    const [p] = deriveParcels(obs);
+    expect(p.intake.lines.length).toBe(2);
+    expect(p.intake.qty).toBe(7);
+    expect(p.qty).toBe(7);
+    expect(p.flags.multiIntake).toBe(true);
+  });
+
+  test("mixed units keep a per-unit breakdown and flag, never a bare misleading total", () => {
+    const obs = [
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 3, qtyRaw: "3PALLTE", qtyUnit: "pallte", eventDate: new Date("2026-08-07") }),
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 4, qtyRaw: "4", qtyUnit: "pieces", eventDate: new Date("2026-08-10") }),
+    ];
+    const [p] = deriveParcels(obs);
+    expect(p.flags.mixedUnits).toBe(true);
+    expect(p.qtyByUnit).toEqual({ pallet: 3, pieces: 4 });
+  });
+
+  test("goods loaded into two containers surface as two legs, summed, multiContainer flagged", () => {
+    const obs = [
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-07-29"), container: { containerNo: "N198" } }),
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-08-03"), container: { containerNo: "N202" } }),
+    ];
+    const [p] = deriveParcels(obs);
+    expect(p.loading.legs.length).toBe(2);
+    expect(p.loading.qty).toBe(10);
+    expect(p.flags.multiContainer).toBe(true);
+    expect([...p.containerNos].sort()).toEqual(["N198", "N202"]);
+  });
+
+  test("one container arrived, one still shipping → currentStage stays loading, partiallyArrived", () => {
+    const obs = [
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-07-29"), container: { containerNo: "N198" } }),
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-08-03"), container: { containerNo: "N202" } }),
+      ob({ stage: "arrival", waybill: "WB", customerPhone: "233111", eventDate: new Date("2026-08-20"), container: { containerNo: "N198" } }), // only N198 landed
+    ];
+    const [p] = deriveParcels(obs);
+    expect(p.currentStage).toBe("loading");
+    expect(p.flags.partiallyArrived).toBe(true);
+    expect(p.loading.legs.find((l) => l.containerNo === "N198").arrived).toBe(true);
+    expect(p.loading.legs.find((l) => l.containerNo === "N202").arrived).toBe(false);
+  });
+
+  test("all containers arrived → currentStage arrival, not partial", () => {
+    const obs = [
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-07-29"), container: { containerNo: "N198" } }),
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-08-03"), container: { containerNo: "N202" } }),
+      ob({ stage: "arrival", waybill: "WB", customerPhone: "233111", eventDate: new Date("2026-08-20"), container: { containerNo: "N198" } }),
+      ob({ stage: "arrival", waybill: "WB", customerPhone: "233111", eventDate: new Date("2026-08-25"), container: { containerNo: "N202" } }),
+    ];
+    const [p] = deriveParcels(obs);
+    expect(p.currentStage).toBe("arrival");
+    expect(p.flags.partiallyArrived).toBe(false);
+  });
+
+  test("under-loading (received > loaded) is in-progress, NOT a qty mismatch", () => {
+    const obs = [
+      ob({ stage: "intake",  waybill: "WB", customerPhone: "233111", qty: 40, eventDate: new Date("2026-08-01") }),
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 16, eventDate: new Date("2026-08-05"), container: { containerNo: "N1" } }),
+    ];
+    expect(deriveParcels(obs)[0].flags.qtyMismatch).toBe(false);
+  });
+
+  test("over-loading (loaded > received) IS a qty mismatch", () => {
+    const obs = [
+      ob({ stage: "intake",  waybill: "WB", customerPhone: "233111", qty: 2, eventDate: new Date("2026-08-01") }),
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-08-05"), container: { containerNo: "N1" } }),
+    ];
+    expect(deriveParcels(obs)[0].flags.qtyMismatch).toBe(true);
+  });
+
+  test("dedup + aggregation is order-independent", () => {
+    const scn = [
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 3, qtyRaw: "3", eventDate: new Date("2026-08-07"), fileHash: "A" }),
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 4, qtyRaw: "4", eventDate: new Date("2026-08-10"), fileHash: "B" }),
+      ob({ stage: "intake", waybill: "WB", customerPhone: "233111", qty: 4, qtyRaw: "4", eventDate: new Date("2026-08-10"), fileHash: "C" }), // dup of the 2nd
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 7, eventDate: new Date("2026-08-15"), container: { containerNo: "N200" } }),
+    ];
+    const [a] = deriveParcels(scn);
+    const [b] = deriveParcels([...scn].reverse());
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+    expect(a.intake.qty).toBe(7); // 3 + 4 (dup dropped)
+    expect(a.intake.lines.length).toBe(2);
+  });
+});
+
 describe("structural guarantees", () => {
   const scenario = [
     ob({ stage: "intake", waybill: "A", customerPhone: "233111", qty: 1 }),

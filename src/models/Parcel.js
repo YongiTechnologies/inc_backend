@@ -11,13 +11,30 @@ const mongoose = require("mongoose");
  * live in ManualAdjustment and are overlaid after derivation, so re-deriving
  * from files never wipes them.
  */
+// One physical receipt on an intake sheet. A tracking number for one customer
+// can carry several (goods received over multiple days), so intake keeps the
+// full list and reports the summed quantity.
+const intakeLineSchema = new mongoose.Schema(
+  { date: Date, qty: Number, qtyRaw: String, qtyUnit: String, warehouse: String, srcRow: Number, fileHash: String },
+  { _id: false }
+);
+// One container leg on a loading sheet. The same waybill/customer is regularly
+// split across several containers loaded on different days.
+const loadingLegSchema = new mongoose.Schema(
+  { containerNo: String, batchRef: String, loadingDate: Date, etd: String, eta: String,
+    cbm: Number, qty: Number, qtyRaw: String, qtyUnit: String, srcRow: Number, fileHash: String,
+    arrived: { type: Boolean, default: false } },
+  { _id: false }
+);
 const stageIntakeSchema = new mongoose.Schema(
-  { date: Date, warehouse: String, qty: Number, qtyRaw: String, kg: Number, srcRow: Number, fileHash: String },
+  { date: Date, warehouse: String, qty: Number, qtyRaw: String, kg: Number, srcRow: Number, fileHash: String,
+    lines: { type: [intakeLineSchema], default: undefined } },
   { _id: false }
 );
 const stageLoadingSchema = new mongoose.Schema(
   { containerNo: String, batchRef: String, loadingDate: Date, etd: String, eta: String,
-    cbm: Number, location: String, qty: Number, srcRow: Number, fileHash: String },
+    cbm: Number, location: String, qty: Number, srcRow: Number, fileHash: String,
+    legs: { type: [loadingLegSchema], default: undefined } },
   { _id: false }
 );
 const stageArrivalSchema = new mongoose.Schema(
@@ -47,6 +64,13 @@ const parcelSchema = new mongoose.Schema(
     arrival: { type: stageArrivalSchema, default: null },
 
     qty:                { type: Number },
+    // Present only when a parcel's lines span more than one unit (e.g. some
+    // pallets, some loose pieces), so the UI can show "3 pallet + 4 pieces"
+    // instead of a misleading single total.
+    qtyByUnit:          { type: mongoose.Schema.Types.Mixed, default: undefined },
+    // Every container this parcel is loaded into (a split shipment has several).
+    // Manifest queries match on this rather than the scalar loading.containerNo.
+    containerNos:       { type: [String], default: undefined, index: true },
     productDescription: { type: String },
     financials: {
       freightTerm:   { type: String },
@@ -63,6 +87,10 @@ const parcelSchema = new mongoose.Schema(
       loadedNeverReceived: { type: Boolean, default: false, index: true },
       qtyMismatch:         { type: Boolean, default: false },
       needsWaybill:        { type: Boolean, default: false },
+      multiIntake:         { type: Boolean, default: false },
+      multiContainer:      { type: Boolean, default: false },
+      mixedUnits:          { type: Boolean, default: false },
+      partiallyArrived:    { type: Boolean, default: false, index: true },
     },
 
     // ── overlaid manual facts (from ManualAdjustment) ─────────────────────────
