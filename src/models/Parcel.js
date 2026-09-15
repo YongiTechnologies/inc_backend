@@ -91,6 +91,7 @@ const parcelSchema = new mongoose.Schema(
       multiContainer:      { type: Boolean, default: false },
       mixedUnits:          { type: Boolean, default: false },
       partiallyArrived:    { type: Boolean, default: false, index: true },
+      partiallyLoaded:     { type: Boolean, default: false, index: true },
     },
 
     // ── overlaid manual facts (from ManualAdjustment) ─────────────────────────

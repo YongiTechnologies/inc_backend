@@ -430,6 +430,10 @@ function foldParcel(group) {
       // less is just an in-progress shipment (goods still to be packed), so
       // only the former is flagged — otherwise every mid-shipment parcel trips.
       qtyMismatch:         intakeAgg.qty != null && loadingAgg.qty != null && loadingAgg.qty > intakeAgg.qty,
+      // Received more than has been loaded so far — some of this customer's
+      // goods are still in the warehouse awaiting a container. Informational,
+      // not an error (the counterpart to loading MORE than was received).
+      partiallyLoaded:     hasIntake && hasLoading && intakeAgg.qty != null && loadingAgg.qty != null && loadingAgg.qty < intakeAgg.qty,
       multiIntake:         intakeLines.length > 1,                    // goods received over several days
       multiContainer:      new Set(loadingLegs.map((l) => l.containerNo).filter(Boolean)).size > 1,
       mixedUnits:          intakeAgg.mixedUnits || loadingAgg.mixedUnits,
