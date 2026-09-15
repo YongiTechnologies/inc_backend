@@ -197,12 +197,22 @@ describe("multi-line-item aggregation", () => {
     expect(p.flags.partiallyArrived).toBe(false);
   });
 
-  test("under-loading (received > loaded) is in-progress, NOT a qty mismatch", () => {
+  test("under-loading (received > loaded) is in-progress: partiallyLoaded, NOT a qty mismatch", () => {
     const obs = [
       ob({ stage: "intake",  waybill: "WB", customerPhone: "233111", qty: 40, eventDate: new Date("2026-08-01") }),
       ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 16, eventDate: new Date("2026-08-05"), container: { containerNo: "N1" } }),
     ];
-    expect(deriveParcels(obs)[0].flags.qtyMismatch).toBe(false);
+    const [p] = deriveParcels(obs);
+    expect(p.flags.qtyMismatch).toBe(false);
+    expect(p.flags.partiallyLoaded).toBe(true);
+  });
+
+  test("fully loaded (received === loaded) is not partiallyLoaded", () => {
+    const obs = [
+      ob({ stage: "intake",  waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-08-01") }),
+      ob({ stage: "loading", waybill: "WB", customerPhone: "233111", qty: 5, eventDate: new Date("2026-08-05"), container: { containerNo: "N1" } }),
+    ];
+    expect(deriveParcels(obs)[0].flags.partiallyLoaded).toBe(false);
   });
 
   test("over-loading (loaded > received) IS a qty mismatch", () => {
