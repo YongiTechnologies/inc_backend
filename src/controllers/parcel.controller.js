@@ -29,12 +29,24 @@ function sanitizePublicParcel(p) {
     status:       p.status,
     customerName: p.customerName || null,
     receivedDate: p.receivedDate || null,
-    intake:  p.intake  ? { date: p.intake.date,  warehouse: p.intake.warehouse } : null,
-    loading: p.loading ? { containerNo: p.loading.containerNo, loadingDate: p.loading.loadingDate, etd: p.loading.etd, eta: p.loading.eta, location: p.loading.location, cbm: p.loading.cbm ?? null } : null,
+    intake:  p.intake  ? {
+      date: p.intake.date, warehouse: p.intake.warehouse, qty: p.intake.qty ?? null,
+      // Each physical receipt (date + qty) — none of it is cross-customer PII.
+      lines: (p.intake.lines || []).map((l) => ({ date: l.date, qty: l.qty ?? null, qtyRaw: l.qtyRaw ?? null })),
+    } : null,
+    loading: p.loading ? {
+      containerNo: p.loading.containerNo, loadingDate: p.loading.loadingDate, etd: p.loading.etd, eta: p.loading.eta,
+      location: p.loading.location, cbm: p.loading.cbm ?? null,
+      // Each container leg, with its own arrival state, so a split shipment
+      // shows every container instead of just one.
+      legs: (p.loading.legs || []).map((l) => ({ containerNo: l.containerNo, loadingDate: l.loadingDate, etd: l.etd, eta: l.eta, qty: l.qty ?? null, arrived: !!l.arrived })),
+    } : null,
     arrival: p.arrival ? { date: p.arrival.date, containerNo: p.arrival.containerNo } : null,
-    qty:      p.qty ?? null,
+    qty:       p.qty ?? null,
+    qtyByUnit: p.qtyByUnit ?? null,
     cbm:      (p.loading && p.loading.cbm != null) ? p.loading.cbm : null,
     productDescription: p.productDescription || null,
+    partiallyArrived: !!(p.flags && p.flags.partiallyArrived),
   };
 }
 
@@ -151,7 +163,7 @@ async function listParcels(req, res, next) {
     const { bucket, container, stage, search, phone, page = 1, limit = 25 } = req.query;
     const filter = {};
     if (bucket && BUCKET_FILTER[bucket]) Object.assign(filter, BUCKET_FILTER[bucket]);
-    if (container) filter["loading.containerNo"] = container;
+    if (container) filter.containerNos = container;
     if (stage) filter.currentStage = stage;
     if (phone) filter.customerPhone = normalisePhone(phone);
     if (search) {
@@ -206,15 +218,19 @@ async function reconciliation(req, res, next) {
 /** One row per container, with counts and its loading metadata. */
 async function listContainers(req, res, next) {
   try {
+    // Unwind container legs so a parcel split across several containers is
+    // counted under each one it is actually in (with that leg's own arrival
+    // state), not just its primary container.
     const rows = await Parcel.aggregate([
-      { $match: { "loading.containerNo": { $ne: null } } },
+      { $match: { "loading.legs.0": { $exists: true } } },
+      { $unwind: "$loading.legs" },
       { $group: {
-          _id: "$loading.containerNo",
+          _id: "$loading.legs.containerNo",
           parcels:     { $sum: 1 },
-          loadingDate: { $max: "$loading.loadingDate" },
-          etd:         { $first: "$loading.etd" },
-          eta:         { $first: "$loading.eta" },
-          arrived:     { $sum: { $cond: [{ $eq: ["$currentStage", "arrival"] }, 1, 0] } },
+          loadingDate: { $max: "$loading.legs.loadingDate" },
+          etd:         { $first: "$loading.legs.etd" },
+          eta:         { $first: "$loading.legs.eta" },
+          arrived:     { $sum: { $cond: ["$loading.legs.arrived", 1, 0] } },
           // Distinct receiving days the container drew from (the fan-in).
           receivingDays: { $addToSet: {
             $cond: [
@@ -224,6 +240,7 @@ async function listContainers(req, res, next) {
             ],
           } },
       } },
+      { $match: { _id: { $ne: null } } },
       { $sort: { loadingDate: -1 } },
     ]);
     return respond(res, 200, true, "Containers retrieved", {
@@ -244,16 +261,22 @@ async function listContainers(req, res, next) {
 async function getContainer(req, res, next) {
   try {
     const containerNo = String(req.params.containerNo);
-    const parcels = await Parcel.find({ "loading.containerNo": containerNo }).lean();
+    const parcels = await Parcel.find({ containerNos: containerNo }).lean();
     if (!parcels.length) return respond(res, 404, false, "No such container.");
     const receivedDays = [...new Set(parcels.filter((p) => p.receivedDate)
       .map((p) => new Date(p.receivedDate).toISOString().slice(0, 10)))].sort();
+    // A parcel may be split across containers, so attach the leg for THIS
+    // container (its qty/dates here) rather than the parcel-wide totals.
+    const legOf = (p) => ((p.loading && p.loading.legs) || []).find((l) => l.containerNo === containerNo) || null;
+    const firstLeg = legOf(parcels[0]);
     return respond(res, 200, true, "Container manifest", {
       containerNo,
       parcels: parcels.length,
-      meta: parcels[0].loading,
+      meta: firstLeg
+        ? { containerNo, loadingDate: firstLeg.loadingDate, etd: firstLeg.etd, eta: firstLeg.eta }
+        : parcels[0].loading,
       spansReceivingDays: receivedDays,          // proof it draws from many intake days
-      list: parcels,
+      list: parcels.map((p) => ({ ...p, containerLeg: legOf(p) })),
     });
   } catch (err) { next(err); }
 }

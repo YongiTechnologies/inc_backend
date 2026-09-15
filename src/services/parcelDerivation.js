@@ -183,6 +183,96 @@ function foldFinancials(obs) {
   return out;
 }
 
+const asDate = (v) => (v ? new Date(v) : null);
+const upper  = (s) => (s == null ? "" : String(s).trim().toUpperCase());
+const dstr   = (d) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+
+/**
+ * Normalise a quantity unit for summing: lowercased and de-typo'd, so "PALLET",
+ * "pallets" and the real-world typo "PALLTE" all bucket as `pallet`. A plain
+ * number with no unit counts as `pieces`.
+ */
+function normUnit(u) {
+  if (!u) return "pieces";
+  const s = String(u).toLowerCase();
+  if (s.startsWith("pall") || s.startsWith("plt") || s === "pallte") return "pallet";
+  if (s.startsWith("cart")) return "carton";
+  if (s.startsWith("box"))  return "box";
+  if (s.startsWith("bag"))  return "bag";
+  if (s.startsWith("ctn"))  return "carton";
+  if (s.startsWith("pc") || s.startsWith("piece")) return "pieces";
+  return s;
+}
+
+/**
+ * Content identity of one physical listing at a stage. The same receipt (or
+ * container leg) re-listed on an overlapping or re-saved sheet — a different
+ * `fileHash`, so byte-level dedup misses it — collapses to ONE line here;
+ * genuinely distinct receipts/legs stay separate. `includeContainer` keeps two
+ * real containers apart at the loading stage while still merging a re-saved
+ * copy of the same container's sheet. DB-free and clock-free, so the fold stays
+ * order-independent and idempotent.
+ */
+function contentLineKey(o, includeContainer) {
+  const parts = [dstr(o.eventDate), o.qty == null ? "" : o.qty, upper(o.qtyRaw), upper(o.productDescription)];
+  if (includeContainer) parts.push(upper(o.container && o.container.containerNo));
+  return parts.join("|");
+}
+
+/**
+ * Collapse a stage's observations to content-deduped lines. Within a dedup
+ * bucket the most-recent observation (byRecency) supplies the representative
+ * values — the same "latest non-null wins" intuition, but per physical line
+ * instead of across the whole stage, so distinct goods are no longer dropped.
+ */
+function dedupeLines(list, includeContainer) {
+  const sorted = [...list].sort(byRecency); // oldest → newest
+  const byKey = new Map();
+  for (const o of sorted) byKey.set(contentLineKey(o, includeContainer), o); // newest wins
+  return [...byKey.values()];
+}
+
+/**
+ * Sum quantities across lines, unit-aware. Returns the numeric total plus, when
+ * more than one unit is present, a per-unit breakdown so the UI never shows a
+ * misleading bare number (e.g. "3 pallet + 4 pieces", not "7").
+ */
+function sumQty(lines) {
+  const byUnit = {};
+  let any = false;
+  for (const l of lines) {
+    if (l.qty == null) continue;
+    any = true;
+    const u = normUnit(l.qtyUnit);
+    byUnit[u] = (byUnit[u] || 0) + l.qty;
+  }
+  if (!any) return { qty: null, qtyByUnit: null, mixedUnits: false };
+  const units = Object.keys(byUnit);
+  const total = units.reduce((s, u) => s + byUnit[u], 0);
+  return { qty: total, qtyByUnit: units.length > 1 ? byUnit : null, mixedUnits: units.length > 1 };
+}
+
+/** Sum a numeric field across lines, ignoring nulls (returns null if none). */
+function sumField(lines, field) {
+  let total = null;
+  for (const l of lines) if (l[field] != null && l[field] !== "") total = (total || 0) + Number(l[field]);
+  return total;
+}
+
+// Stable ordering for the surfaced line/leg arrays (date, then row, then file).
+function lineSort(a, b) {
+  const ta = a.date ? +a.date : 0, tb = b.date ? +b.date : 0;
+  if (ta !== tb) return ta - tb;
+  if ((a.srcRow || 0) !== (b.srcRow || 0)) return (a.srcRow || 0) - (b.srcRow || 0);
+  return (a.fileHash || "") < (b.fileHash || "") ? -1 : (a.fileHash || "") > (b.fileHash || "") ? 1 : 0;
+}
+function legSort(a, b) {
+  const ta = a.loadingDate ? +a.loadingDate : 0, tb = b.loadingDate ? +b.loadingDate : 0;
+  if (ta !== tb) return ta - tb;
+  if ((a.containerNo || "") !== (b.containerNo || "")) return (a.containerNo || "") < (b.containerNo || "") ? -1 : 1;
+  return lineSort(a, b);
+}
+
 /** Fold one customer's observations on one waybill into a Parcel. */
 function foldParcel(group) {
   const obs = [...group].sort(byRecency);
@@ -206,34 +296,80 @@ function foldParcel(group) {
   const hasLoading = byStage.loading.length > 0;
   const hasArrival = byStage.arrival.length > 0;
 
-  let currentStage = "intake";
-  for (const o of obs) if (STAGE_RANK[o.stage] > STAGE_RANK[currentStage]) currentStage = o.stage;
+  // ── Content-deduped physical lines per stage ────────────────────────────
+  // One tracking number for one customer legitimately carries several goods:
+  // received on different days (multiple intake lines) and loaded into
+  // different containers (multiple loading legs). Fold each into a line/leg
+  // rather than letting the latest sheet's value overwrite the rest.
+  const intakeLineObs = dedupeLines(byStage.intake, false);
+  const loadingLegObs = dedupeLines(byStage.loading, true);
 
-  const intakeQty  = pick(byStage.intake, "qty");
-  const loadingQty = pick(byStage.loading, "qty");
+  // Containers whose arrival sheet has been uploaded. If an arrival row carries
+  // no container number at all, the waybill is simply marked arrived, so every
+  // leg counts as arrived.
+  const arrivedContainers = new Set(
+    byStage.arrival.map((o) => o.container && o.container.containerNo).filter(Boolean).map(upper)
+  );
+  const arrivalWithoutContainer = hasArrival && arrivedContainers.size === 0;
+
+  const intakeLines = intakeLineObs.map((o) => ({
+    date:      asDate(o.eventDate),
+    qty:       o.qty ?? null,
+    qtyRaw:    o.qtyRaw ?? null,
+    qtyUnit:   o.qtyUnit ?? null,
+    warehouse: o.warehouse ?? null,
+    srcRow:    o.srcRow,
+    fileHash:  o.fileHash,
+  })).sort(lineSort);
+
+  const loadingLegs = loadingLegObs.map((o) => {
+    const c = o.container || {};
+    const cno = c.containerNo || null;
+    return {
+      containerNo: cno,
+      batchRef:    c.batchRef ?? null,
+      loadingDate: c.loadingDate ? new Date(c.loadingDate) : asDate(o.eventDate),
+      etd:         c.etd ?? null,
+      eta:         c.eta ?? null,
+      cbm:         o.cbm ?? null,
+      qty:         o.qty ?? null,
+      qtyRaw:      o.qtyRaw ?? null,
+      qtyUnit:     o.qtyUnit ?? null,
+      srcRow:      o.srcRow,
+      fileHash:    o.fileHash,
+      arrived:     cno ? (arrivedContainers.has(upper(cno)) || arrivalWithoutContainer) : arrivalWithoutContainer,
+    };
+  }).sort(legSort);
+
+  const intakeAgg  = sumQty(intakeLines);
+  const loadingAgg = sumQty(loadingLegs);
+
+  // The most-recent leg supplies the scalar back-compat fields (card chip, etc.).
+  const primaryLeg = loadingLegs.length ? loadingLegs[loadingLegs.length - 1] : null;
 
   const intake = hasIntake ? {
-    date:      pickDate(byStage.intake, "eventDate"),
+    date:      intakeLines.reduce((min, l) => (l.date && (!min || l.date < min) ? l.date : min), null), // earliest receipt
     warehouse: pick(byStage.intake, "warehouse"),
-    qty:       intakeQty,
+    qty:       intakeAgg.qty,
     qtyRaw:    pick(byStage.intake, "qtyRaw"),
-    kg:        pick(byStage.intake, "kg"),
-    srcRow:    byStage.intake[byStage.intake.length - 1].srcRow,
-    fileHash:  byStage.intake[byStage.intake.length - 1].fileHash,
+    kg:        sumField(intakeLineObs, "kg"),
+    lines:     intakeLines,
+    srcRow:    intakeLines.length ? intakeLines[intakeLines.length - 1].srcRow : null,
+    fileHash:  intakeLines.length ? intakeLines[intakeLines.length - 1].fileHash : null,
   } : null;
 
-  const loadingObs = hasLoading ? byStage.loading[byStage.loading.length - 1] : null;
   const loading = hasLoading ? {
-    containerNo: loadingObs.container ? loadingObs.container.containerNo : null,
-    batchRef:    loadingObs.container ? loadingObs.container.batchRef : null,
-    loadingDate: loadingObs.container ? (loadingObs.container.loadingDate ? new Date(loadingObs.container.loadingDate) : null) : pickDate(byStage.loading, "eventDate"),
-    etd:         loadingObs.container ? loadingObs.container.etd : null,
-    eta:         loadingObs.container ? loadingObs.container.eta : null,
+    containerNo: primaryLeg ? primaryLeg.containerNo : null,
+    batchRef:    primaryLeg ? primaryLeg.batchRef : null,
+    loadingDate: primaryLeg ? primaryLeg.loadingDate : pickDate(byStage.loading, "eventDate"),
+    etd:         primaryLeg ? primaryLeg.etd : null,
+    eta:         primaryLeg ? primaryLeg.eta : null,
     cbm:         pick(byStage.loading, "cbm"),
     location:    pick(byStage.loading, "location"),
-    qty:         loadingQty,
-    srcRow:      loadingObs.srcRow,
-    fileHash:    loadingObs.fileHash,
+    qty:         loadingAgg.qty,
+    legs:        loadingLegs,
+    srcRow:      primaryLeg ? primaryLeg.srcRow : null,
+    fileHash:    primaryLeg ? primaryLeg.fileHash : null,
   } : null;
 
   const arrivalObs = hasArrival ? byStage.arrival[byStage.arrival.length - 1] : null;
@@ -243,6 +379,24 @@ function foldParcel(group) {
     srcRow:      arrivalObs.srcRow,
     fileHash:    arrivalObs.fileHash,
   } : null;
+
+  // ── Conservative status (least-advanced leg wins) ───────────────────────
+  // A parcel is only "arrival" once EVERY container leg has arrived; while some
+  // legs are still on the water it stays "loading" and flags partiallyArrived,
+  // so the customer is never told the whole shipment landed before it has.
+  const someLegArrived = loadingLegs.some((l) => l.arrived);
+  const allLegsArrived = loadingLegs.length > 0 && loadingLegs.every((l) => l.arrived);
+  let currentStage = "intake";
+  if (hasLoading) currentStage = "loading";
+  if (hasArrival && (loadingLegs.length === 0 || allLegsArrived)) currentStage = "arrival";
+  const partiallyArrived = loadingLegs.length > 0 && someLegArrived && !allLegsArrived;
+
+  const chosenAgg = intakeAgg.qty != null ? intakeAgg : loadingAgg;
+
+  const containerNos = [...new Set([
+    ...loadingLegs.map((l) => l.containerNo),
+    ...byStage.arrival.map((o) => o.container && o.container.containerNo),
+  ].filter(Boolean))];
 
   return {
     waybill: obs[0].waybill,
@@ -262,7 +416,9 @@ function foldParcel(group) {
     loading,
     arrival,
 
-    qty: intakeQty ?? loadingQty ?? null,
+    qty:       chosenAgg.qty ?? null,
+    qtyByUnit: chosenAgg.qtyByUnit,
+    containerNos,
     productDescription: pick(obs, "productDescription"),
     financials: foldFinancials(obs),
 
@@ -270,7 +426,14 @@ function foldParcel(group) {
       needsPhone:          !customerPhone,
       receivedNotLoaded:   hasIntake && !hasLoading && !hasArrival,   // still in warehouse
       loadedNeverReceived: (hasLoading || hasArrival) && !hasIntake,  // intake sheet missing / packed unscanned
-      qtyMismatch:         intakeQty != null && loadingQty != null && intakeQty !== loadingQty,
+      // Loading MORE than was ever received is a genuine data error; loading
+      // less is just an in-progress shipment (goods still to be packed), so
+      // only the former is flagged — otherwise every mid-shipment parcel trips.
+      qtyMismatch:         intakeAgg.qty != null && loadingAgg.qty != null && loadingAgg.qty > intakeAgg.qty,
+      multiIntake:         intakeLines.length > 1,                    // goods received over several days
+      multiContainer:      new Set(loadingLegs.map((l) => l.containerNo).filter(Boolean)).size > 1,
+      mixedUnits:          intakeAgg.mixedUnits || loadingAgg.mixedUnits,
+      partiallyArrived,                                               // some containers landed, some still shipping
     },
 
     observationRefs: obs.map((o) => ({ fileHash: o.fileHash, srcRow: o.srcRow, tokenIndex: o.tokenIndex, stage: o.stage })),
@@ -318,6 +481,9 @@ module.exports = {
   foldParcel,
   canonicalKey,
   normalizeName,
+  dedupeLines,
+  sumQty,
+  normUnit,
   STAGE_RANK,
   STAGE_STATUS,
   STATUS_ORDER,
