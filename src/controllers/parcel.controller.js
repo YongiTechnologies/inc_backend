@@ -69,6 +69,17 @@ async function validateUpload(req, res, next) {
       ? await Parcel.find({ waybill: { $in: waybills } }).distinct("waybill")
       : [];
     const existingSet = new Set(existing);
+
+    // Warn before committing: is this the same bytes, or the same contents (a
+    // re-saved / renamed copy), as a file already active?
+    const [exactTwin, contentTwin] = await Promise.all([
+      SourceFile.findOne({ fileHash: built.sourceFile.fileHash, status: "active" }),
+      built.sourceFile.contentHash
+        ? SourceFile.findOne({ contentHash: built.sourceFile.contentHash, status: "active" })
+        : null,
+    ]);
+    const twin = exactTwin || contentTwin;
+
     return respond(res, 200, true, "Parsed preview", {
       stage:          built.stage,
       headerWarnings: built.headerWarnings,
@@ -77,6 +88,14 @@ async function validateUpload(req, res, next) {
       skippedRows:    built.skippedRows.length,
       willLinkExisting: waybills.filter((w) => existingSet.has(w)).length,
       willCreateNew:    waybills.filter((w) => !existingSet.has(w)).length,
+      // A duplicate of an already-uploaded sheet — so staff don't create a twin
+      // that makes a later revert look like it did nothing.
+      duplicateOf: twin ? {
+        exact: !!exactTwin,
+        fileHash: twin.fileHash,
+        originalFilename: twin.originalFilename,
+        uploadedAt: twin.uploadedAt,
+      } : null,
       sampleRows:     built.observations.slice(0, 5).map((o) => ({
         waybill: o.waybill, customerPhone: o.customerPhone, shippingMark: o.shippingMark,
         customerName: o.customerName, qty: o.qty, receivedDate: o.receivedDate,
@@ -93,6 +112,8 @@ async function upload(req, res, next) {
       filename:    req.file.originalname,
       uploadedBy:  req.user._id,
       expectStage: req.query.stage || null,
+      allowContentDuplicate: req.query.force === "true",   // "Upload anyway"
+      replaceFileHash:       req.query.replace || null,    // "Replace existing"
     });
     await audit.log({
       performedBy: req.user._id,
@@ -106,7 +127,13 @@ async function upload(req, res, next) {
   } catch (err) {
     if (err instanceof ingest.DuplicateFileError) {
       return respond(res, 409, false, "This exact file has already been uploaded.", {
-        fileHash: err.fileHash, uploadedAt: err.uploadedAt,
+        exactDuplicate: true, fileHash: err.fileHash, uploadedAt: err.uploadedAt,
+      });
+    }
+    if (err instanceof ingest.ContentDuplicateError) {
+      return respond(res, 409, false,
+        `A sheet with the same contents was already uploaded${err.originalFilename ? ` ("${err.originalFilename}")` : ""}. Replace it, or upload anyway.`, {
+        contentDuplicate: true, fileHash: err.fileHash, originalFilename: err.originalFilename, uploadedAt: err.uploadedAt,
       });
     }
     if (/missing required column|could not detect|was uploaded to the/i.test(err.message)) {

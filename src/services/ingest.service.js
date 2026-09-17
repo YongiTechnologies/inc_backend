@@ -32,6 +32,25 @@ class DuplicateFileError extends Error {
   }
 }
 
+/**
+ * Raised when a file's BYTES are new but its CONTENTS match an already-active
+ * upload — a re-saved or renamed copy of the same sheet. Left unchecked this is
+ * what makes "revert doesn't delete": the goods stay live via the twin copy.
+ * The caller may override with allowContentDuplicate, or replaceFileHash to
+ * revert the existing copy and take this one in its place.
+ */
+class ContentDuplicateError extends Error {
+  constructor(sourceFile) {
+    super("A sheet with the same contents has already been uploaded.");
+    this.name = "ContentDuplicateError";
+    this.fileHash = sourceFile.fileHash;
+    this.contentHash = sourceFile.contentHash;
+    this.originalFilename = sourceFile.originalFilename;
+    this.uploadedAt = sourceFile.uploadedAt;
+    this.sourceFileId = sourceFile._id;
+  }
+}
+
 /** Resolve a registered customer by the last 9 digits of their phone. */
 async function resolveCustomerId(phone) {
   if (!phone) return null;
@@ -109,7 +128,11 @@ async function rederiveWaybills(waybills) {
  * @param {{filename?:string, uploadedBy?:any, expectStage?:string}} opts
  */
 async function ingestFile(buffer, opts = {}) {
-  const { filename = null, uploadedBy = null, expectStage = null } = opts;
+  const {
+    filename = null, uploadedBy = null, expectStage = null,
+    allowContentDuplicate = false, // ingest even if an active twin exists
+    replaceFileHash = null,        // revert this file first, then ingest (a correction)
+  } = opts;
 
   const built = buildObservations(buffer, { filename, uploadedBy });
   const { sourceFile, observations, stage, skippedRows, missingColumns, headerWarnings } = built;
@@ -125,11 +148,26 @@ async function ingestFile(buffer, opts = {}) {
   const existing = await SourceFile.findOne({ fileHash: sourceFile.fileHash });
   if (existing && existing.status === "active") throw new DuplicateFileError(existing);
 
+  // Content-duplicate guard: new bytes, but the same rows as an active upload.
+  // Skipped when reactivating a byte-known file, when the caller overrides, or
+  // when the twin is exactly the file being replaced.
+  if (!existing && !allowContentDuplicate && sourceFile.contentHash) {
+    const twin = await SourceFile.findOne({ contentHash: sourceFile.contentHash, status: "active" });
+    if (twin && twin.fileHash !== replaceFileHash) throw new ContentDuplicateError(twin);
+  }
+
+  // A correction: roll back the file being replaced before ingesting the new one.
+  let replaced = null;
+  if (replaceFileHash) {
+    try { replaced = await revertFile(replaceFileHash); } catch { /* already gone — ignore */ }
+  }
+
   let sf;
   if (existing) {
     // Previously reverted, now re-uploaded: reactivate rather than duplicate.
     existing.status = "active";
     existing.revertedAt = undefined;
+    if (!existing.contentHash) existing.contentHash = sourceFile.contentHash; // backfill
     await existing.save();
     await Observation.updateMany({ fileHash: sourceFile.fileHash }, { $set: { active: true } });
     sf = existing;
@@ -147,6 +185,7 @@ async function ingestFile(buffer, opts = {}) {
     observationsInserted: observations.length,
     skippedRows,
     headerWarnings,
+    replaced,
     ...recon,
   };
 }
@@ -216,4 +255,5 @@ module.exports = {
   resolveCustomerId,
   applyAdjustment,
   DuplicateFileError,
+  ContentDuplicateError,
 };
