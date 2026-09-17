@@ -27,6 +27,28 @@ function sha256(buffer) {
 }
 
 /**
+ * A hash of a sheet's SUBSTANTIVE CONTENT — the set of rows it carries — rather
+ * than its bytes. Byte-level `sha256` (fileHash) only catches an identical
+ * re-upload; a sheet that is re-saved, re-exported or renamed produces new bytes
+ * and slips through as a "new" file, so the same goods get ingested twice and a
+ * later revert of one copy leaves them live via the other. This signature is
+ * independent of filename, byte formatting and upload time: it sorts the rows
+ * (order-independent) and keys each on its real content (tracking number,
+ * customer, quantity, receiving date). Two uploads of the same sheet share it.
+ */
+function contentSignature(observations, stage) {
+  const rows = (observations || []).map((o) => [
+    o.waybill || "",
+    o.customerKey || "",
+    o.qty == null ? "" : o.qty,
+    (o.qtyRaw || "").toString().toUpperCase().trim(),
+    o.eventDate ? new Date(o.eventDate).toISOString().slice(0, 10) : "",
+  ].join("|"));
+  rows.sort();
+  return crypto.createHash("sha256").update(`${stage || ""}\n${rows.join("\n")}`).digest("hex");
+}
+
+/**
  * The date a parcel physically entered the warehouse. Present on BOTH intake
  * rows and loading rows (the loading list carries a RECEIVING DATE column), so
  * a parcel's received-date is knowable even when its intake sheet was never
@@ -78,7 +100,7 @@ function buildObservations(buffer, opts = {}) {
     rowCount: parsed.items.length,
     skippedRows: parsed.skippedRows,
     status: "active",
-  };
+  };  // contentHash is filled in below, once observations are built.
 
   // A single sheet cell holding several tracking numbers yields several items
   // sharing one srcRow; number them so each observation is uniquely addressable
@@ -153,6 +175,10 @@ function buildObservations(buffer, opts = {}) {
     };
   });
 
+  // Content signature over the built observations — catches a re-saved/renamed
+  // copy of the same sheet that byte-level fileHash misses.
+  sourceFile.contentHash = contentSignature(observations, stage);
+
   return {
     sourceFile,
     observations,
@@ -163,4 +189,4 @@ function buildObservations(buffer, opts = {}) {
   };
 }
 
-module.exports = { buildObservations, sha256, STAGE_MAP };
+module.exports = { buildObservations, sha256, contentSignature, STAGE_MAP };

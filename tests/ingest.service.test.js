@@ -87,6 +87,9 @@ const ingest = require("../src/services/ingest.service");
 
 const FX = path.join(__dirname, "fixtures");
 const buf = (name) => fs.readFileSync(path.join(FX, name));
+// Simulate a re-saved / renamed copy: same substantive rows, different bytes
+// (trailing padding changes the sha256 but the sheet still parses identically).
+const resave = (name) => Buffer.concat([buf(name), Buffer.from([0, 0, 0])]);
 const GR31 = "goods_received_31-07-2026.xlsx";
 const N201 = "loading_N201_01-08-2026.xlsx";
 
@@ -143,6 +146,37 @@ describe("ingest.service", () => {
 
     expect(mockParcel._docs.some((p) => p.currentStage === "loading" && p.loading)).toBe(false);
     expect(mockParcel._docs.filter((p) => p.flags.receivedNotLoaded).length).toBeGreaterThan(0);
+  });
+
+  test("content signature ignores byte/formatting differences but a re-save keeps it", () => {
+    const { buildObservations } = require("../src/services/observations");
+    const a = buildObservations(buf(GR31), { filename: "a.xlsx" });
+    const b = buildObservations(resave(GR31), { filename: "a (1).xlsx" });
+    expect(a.sourceFile.contentHash).toBe(b.sourceFile.contentHash); // same data
+    expect(a.sourceFile.fileHash).not.toBe(b.sourceFile.fileHash);   // different bytes
+  });
+
+  test("a re-saved/renamed copy (same contents, new bytes) is blocked as a content duplicate", async () => {
+    await ingest.ingestFile(buf(GR31), { filename: GR31 });
+    const files1 = mockSourceFile._docs.length;
+    await expect(ingest.ingestFile(resave(GR31), { filename: "GOODS RECEIVED 31-07 (1).xlsx" }))
+      .rejects.toThrow(ingest.ContentDuplicateError);
+    expect(mockSourceFile._docs.length).toBe(files1); // no twin file created
+  });
+
+  test("allowContentDuplicate ingests the twin anyway", async () => {
+    await ingest.ingestFile(buf(GR31), { filename: GR31 });
+    await ingest.ingestFile(resave(GR31), { filename: "GR31 (1).xlsx", allowContentDuplicate: true });
+    expect(mockSourceFile._docs.filter((f) => f.status === "active").length).toBe(2);
+  });
+
+  test("replaceFileHash reverts the original and takes the new copy's place (one active file)", async () => {
+    const first = await ingest.ingestFile(buf(GR31), { filename: GR31 });
+    const origHash = first.sourceFile.fileHash;
+    const r = await ingest.ingestFile(resave(GR31), { filename: "GOODS RECEIVED 31-07 fixed.xlsx", replaceFileHash: origHash });
+    expect(mockSourceFile._docs.find((f) => f.fileHash === origHash).status).toBe("reverted");
+    expect(mockSourceFile._docs.filter((f) => f.status === "active").length).toBe(1);
+    expect(r.replaced).toBeTruthy();
   });
 
   test("bulk status advances a parcel and survives re-derivation (furthest wins)", async () => {

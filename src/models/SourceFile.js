@@ -13,6 +13,9 @@ const mongoose = require("mongoose");
 const sourceFileSchema = new mongoose.Schema(
   {
     fileHash:         { type: String, required: true, unique: true, index: true },
+    // Hash of the sheet's substantive rows (not its bytes) — detects a re-saved
+    // or renamed copy of the same sheet that fileHash misses. See observations.js.
+    contentHash:      { type: String, index: true },
     stage:            { type: String, enum: ["intake", "loading", "arrival"], required: true },
     originalFilename: { type: String },
     uploadedBy:       { type: mongoose.Schema.Types.ObjectId, ref: "User" },
