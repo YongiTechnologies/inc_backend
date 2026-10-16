@@ -33,10 +33,10 @@ truth for the v2 UI.
 
 | | |
 |---|---|
-| Backend | `github.com/YongiTechnologies/inc_backend` — Node/Express + Mongoose, on **Railway** |
-| Backend URL | `https://incbackend-production.up.railway.app` |
+| Backend | `github.com/YongiTechnologies/inc_backend` — Node/Express + Mongoose, on **Netlify Functions** (see NETLIFY_DEPLOY.md) |
+| Backend URL | `https://clinette-api.netlify.app` (the frontend proxies `/api/*` to it) |
 | Frontend | `github.com/kofimuad/inc_frontend` — Next.js 16 / React 19 / TS, at **clinetteshipping.com** |
-| Database | **Railway MongoDB**, db name `inc_logistics`. Get the public connection string from Railway → MongoDB service → Connect. Backend talks to it over the internal URL. |
+| Database | **MongoDB Atlas**, db name `inc_logistics` (moved off Railway; see NETLIFY_DEPLOY.md part 1). |
 
 **Deploy freshness has masked several "bugs"** — merging a PR is not enough, the
 host must rebuild. If something looks unfixed, confirm the deploy ran after the
