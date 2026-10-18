@@ -25,8 +25,8 @@ database. The function needs a database it can reach from the internet, and
 
 ### 1a. Create (or choose) the Atlas cluster
 
-Your local `.env` already points at an Atlas cluster called `shipping-logistics`.
-If that's yours and you're happy to use it, skip to 1b. Otherwise:
+(The `shipping-logistics` cluster in the local `.env` no longer exists, so make
+a new one.)
 
 1. Go to https://cloud.mongodb.com and sign in.
 2. **Create** > **M0 (Free)**.
@@ -46,7 +46,7 @@ If that's yours and you're happy to use it, skip to 1b. Otherwise:
    `mongodb+srv://USER:PASSWORD@clinette.xxxxx.mongodb.net/?retryWrites=true&w=majority`.
    Put your password in place of `<db_password>`. This is your **new MONGODB_URI**.
 
-### 1c. Copy the data across
+### 1c. Copy the data across (or skip to 1d and start fresh)
 
 You need the **Railway MongoDB public connection string**: Railway > your
 project > MongoDB service > **Connect** > **Public network**. Railway has to be
@@ -70,6 +70,36 @@ If you see `querySrv ECONNREFUSED`, add `$env:DNS_SERVERS = "8.8.8.8,1.1.1.1"`
 and run it again.
 
 **Don't delete anything on Railway until Part 5 is done.**
+
+### 1d. Starting fresh instead (when the Railway data can't be reached)
+
+If Railway won't start the database until an unpaid bill is cleared, you can
+go live on an empty Atlas database and rebuild. Here's what that means:
+
+| Lost | How it comes back |
+|---|---|
+| Parcels, containers, uploads | Staff re-upload the spreadsheets. Do the oldest first, and for each shipment do intake, then loading, then arrived. |
+| Staff and admin accounts | Create the admins with the command below. Admins then add staff the usual way. |
+| Customer accounts | Customers sign up again (or sign in with Google, which creates the account). |
+| Rates per location and the news ticker | An admin re-enters them in Settings. |
+| Manual status changes made by staff | Gone. Staff redo any that matter. |
+| Audit log, GPS devices and pings | Gone. Re-assign any GPS devices. |
+
+Create the first admins on the new database (PowerShell, from `inc_backend`):
+
+```powershell
+$env:MONGODB_URI = "<new Atlas MONGODB_URI>"
+$env:DB_NAME = "inc_logistics"
+npm run seed-admins -- "admin1@example.com:A-Strong-Password:Full Name"
+```
+
+Use real emails, and give each admin's own password to that admin privately.
+Each admin should change their password after the first login.
+
+**Keep the Railway project (don't delete it).** The old data stays inside it.
+If the bill is paid later, start only the Mongo service and run 1c. The copy
+script refuses to write into collections that already have data, so to merge
+the old data in at that point, ask Abbot first.
 
 ---
 
@@ -160,7 +190,8 @@ The frontend PR changes `netlify.toml` to forward `/api/*` to
    URL to `https://clinette-api.netlify.app/api/gps/webhook/<provider>`.
 3. **Test on the live site:** log in with a password, log in with Google,
    look up a tracking number, upload one spreadsheet, send the contact form.
-4. When everything works for a day or two, delete the Railway project.
+4. When everything works for a day or two, delete the Railway project. **If
+   you started fresh (1d), keep it**, because the old data only exists there.
 
 ---
 
