@@ -34,7 +34,7 @@ truth for the v2 UI.
 | | |
 |---|---|
 | Backend | `github.com/YongiTechnologies/inc_backend` — Node/Express + Mongoose, on **Netlify Functions** (see NETLIFY_DEPLOY.md) |
-| Backend URL | `https://clinette-api.netlify.app` (the frontend proxies `/api/*` to it) |
+| Backend URL | `https://clinette-backend.netlify.app` (the frontend proxies `/api/*` to it) |
 | Frontend | `github.com/kofimuad/inc_frontend` — Next.js 16 / React 19 / TS, at **clinetteshipping.com** |
 | Database | **MongoDB Atlas**, db name `inc_logistics` (moved off Railway; see NETLIFY_DEPLOY.md part 1). |
 

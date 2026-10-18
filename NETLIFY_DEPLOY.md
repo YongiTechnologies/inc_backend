@@ -105,23 +105,28 @@ the old data in at that point, ask Abbot first.
 
 ## Part 2. Backend: a new Netlify team and site
 
-Use a **separate team** so the backend's usage can never pause the frontend
-(on the free plan, running out of credits pauses every site in a team).
+Use a **separate Netlify account** (and so a separate team) so the backend's
+usage can never pause the frontend. On the free plan, running out of credits
+pauses every site in a team, and Netlify allows one free team per person.
 
-1. Sign in at https://app.netlify.com.
-2. Top-left team menu > **Create new team**. Name: `Clinette API`. Plan: **Free**.
+1. Sign up at https://app.netlify.com with a different email than the frontend's
+   account. The new account comes with its own free team.
+2. Sign in to that account.
 3. In that team: **Add new project** > **Import an existing project** > **GitHub**.
 4. Pick `YongiTechnologies/inc_backend`. If you can't see it, click
    **Configure the Netlify app on GitHub** and give it access to the
    YongiTechnologies organisation. An org owner may have to approve this.
 5. Settings screen:
-   - **Project name:** `clinette-api` (gives `https://clinette-api.netlify.app`).
+   - **Project name:** `clinette-backend` (gives `https://clinette-backend.netlify.app`).
      If you pick another name, change the URL in the frontend's `netlify.toml`.
    - **Branch to deploy:** `main` once the PR is merged. Before then, choose
      `feat/netlify-functions` to test it.
    - **Build command:** leave empty. **Publish directory** and **Functions
      directory:** leave as shown (they come from `netlify.toml`).
-6. **Don't deploy yet.** First add the variables in Part 3. If it already
+6. **Turn off visitor protection:** Project configuration > Access & security >
+   Visitor access > set site protection to none. Otherwise every request is sent
+   to a Netlify login page (401).
+7. **Don't deploy yet.** First add the variables in Part 3. If it already
    deployed, that's fine: add them and redeploy.
 
 ---
@@ -156,7 +161,7 @@ otherwise.
 Don't add `PORT`. Functions don't use it.
 
 Then go to **Deploys** > **Trigger deploy** > **Deploy project**. When it's
-green, open https://clinette-api.netlify.app/health. You should see
+green, open https://clinette-backend.netlify.app/health. You should see
 `{"status":"ok", ...}`.
 
 ---
@@ -164,7 +169,7 @@ green, open https://clinette-api.netlify.app/health. You should see
 ## Part 4. Frontend: point it at the new backend
 
 The frontend PR changes `netlify.toml` to forward `/api/*` to
-`https://clinette-api.netlify.app`, and makes the app call its own `/api` when
+`https://clinette-backend.netlify.app`, and makes the app call its own `/api` when
 `NEXT_PUBLIC_API_URL` isn't set.
 
 1. Merge the frontend PR.
@@ -187,7 +192,7 @@ The frontend PR changes `netlify.toml` to forward `/api/*` to
    Credentials > your OAuth client > **Authorised redirect URIs** > add
    `https://clinetteshipping.com/api/auth/google/callback` > Save.
 2. **GPS devices** (only if a provider sends webhooks): change their webhook
-   URL to `https://clinette-api.netlify.app/api/gps/webhook/<provider>`.
+   URL to `https://clinette-backend.netlify.app/api/gps/webhook/<provider>`.
 3. **Test on the live site:** log in with a password, log in with Google,
    look up a tracking number, upload one spreadsheet, send the contact form.
 4. When everything works for a day or two, delete the Railway project. **If
