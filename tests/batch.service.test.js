@@ -691,3 +691,74 @@ describe("shipped batchCode identifies the sheet, not the upload day", () => {
     expect(codeOf()).toBe(first);
   });
 });
+
+// ─── Sheets whose Excel used range runs far past the data ─────────────────────
+//
+// Formatting dragged to the bottom of a sheet makes Excel report a used range
+// down to row 1,048,576. Those blank rows must not be read or recorded as
+// skipped: one such upload stored about a million row numbers (12 MB).
+
+describe("blank tail and skippedRows cap", () => {
+  const LOADING_HEADER = [
+    ["STAGE",            "LOADING"],
+    ["CONTAINER NUMBER", "MSBU8308501"],
+    [null, null],
+    ["TRACKING N0.", "CNEE NAME", "PHONE NUMBER", "QUANTITY", "CBM PER TRACKING"],
+  ];
+
+  function buildWithBlankTail(aoa) {
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!ref"] = "A1:N1048576";
+    // A cell holding only an empty string, as Excel leaves behind, at the very end.
+    ws["N1048576"] = { t: "s", v: "" };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  }
+
+  test("a range to row 1,048,576 records only rows with data that were skipped", () => {
+    const buf = buildWithBlankTail([
+      ...LOADING_HEADER,
+      ["TRK001", "Ama",  "0244000001", 1, 0.2],
+      [null, null, null, null, null],               // blank row inside the data
+      ["TRK002", "Kojo", "0244000002", 2, 0.4],
+      [null, "Totals", null, 3, 0.6],               // has data but no tracking or phone
+    ]);
+
+    const start  = Date.now();
+    const result = parseUnifiedSheet(buf);
+    const ms     = Date.now() - start;
+
+    expect(result.stage).toBe("shipped");
+    expect(result.items.map((i) => i.waybillNo)).toEqual(["TRK001", "TRK002"]);
+    expect(result.skippedRows).toEqual([8]);
+    expect(result.skippedRowsTotal).toBe(1);
+    // Reading the full range took about 5 s; the trimmed read is near instant.
+    expect(ms).toBeLessThan(2000);
+  });
+
+  test("skippedRows is capped at 1000 while skippedRowsTotal keeps the full count", () => {
+    const bad = Array.from({ length: 1500 }, (_, i) => [null, `Note ${i}`, null, 1, 0.1]);
+    const buf = buildXlsx([...LOADING_HEADER, ["TRK001", "Ama", "0244000001", 1, 0.2], ...bad]);
+
+    const result = parseUnifiedSheet(buf);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.skippedRows).toHaveLength(1000);
+    expect(result.skippedRows[0]).toBe(6);
+    expect(result.skippedRowsTotal).toBe(1500);
+  });
+
+  test("a sheet with no values parses as empty", () => {
+    const ws = XLSX.utils.aoa_to_sheet([[null]]);
+    ws["!ref"] = "A1:N1048576";
+    ws["A1"] = { t: "s", v: "   " };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const result = parseUnifiedSheet(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+
+    expect(result.items).toHaveLength(0);
+    expect(result.skippedRows).toEqual([]);
+    expect(result.skippedRowsTotal).toBe(0);
+  });
+});

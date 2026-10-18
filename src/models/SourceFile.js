@@ -25,7 +25,9 @@ const sourceFileSchema = new mongoose.Schema(
     metadata:         { type: mongoose.Schema.Types.Mixed, default: {} },
 
     rowCount:         { type: Number, default: 0 },
+    // Capped at 1000 row numbers; skippedRowsTotal is the full count.
     skippedRows:      [Number],
+    skippedRowsTotal: { type: Number, default: 0 },
 
     status:           { type: String, enum: ["active", "reverted"], default: "active", index: true },
     revertedAt:       { type: Date },

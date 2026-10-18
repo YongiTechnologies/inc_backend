@@ -135,7 +135,7 @@ async function ingestFile(buffer, opts = {}) {
   } = opts;
 
   const built = buildObservations(buffer, { filename, uploadedBy });
-  const { sourceFile, observations, stage, skippedRows, missingColumns, headerWarnings } = built;
+  const { sourceFile, observations, stage, skippedRows, skippedRowsTotal, missingColumns, headerWarnings } = built;
 
   if (!stage) throw new Error("Could not detect the sheet's stage (INTAKE / LOADING / ARRIVAL).");
   if (expectStage && stage !== expectStage) {
@@ -184,6 +184,7 @@ async function ingestFile(buffer, opts = {}) {
     stage,
     observationsInserted: observations.length,
     skippedRows,
+    skippedRowsTotal,
     headerWarnings,
     replaced,
     ...recon,

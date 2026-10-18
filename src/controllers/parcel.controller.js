@@ -85,7 +85,7 @@ async function validateUpload(req, res, next) {
       headerWarnings: built.headerWarnings,
       missingColumns: built.missingColumns,
       totalRows:      built.observations.length,
-      skippedRows:    built.skippedRows.length,
+      skippedRows:    built.skippedRowsTotal,
       willLinkExisting: waybills.filter((w) => existingSet.has(w)).length,
       willCreateNew:    waybills.filter((w) => !existingSet.has(w)).length,
       // A duplicate of an already-uploaded sheet — so staff don't create a twin

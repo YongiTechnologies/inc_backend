@@ -58,7 +58,7 @@ async function doIngest(dir) {
     try {
       if (dryRun) {
         const built = buildObservations(fs.readFileSync(file), { filename: name });
-        console.log(`  [dry] ${name.padEnd(40)} stage=${built.stage} rows=${built.observations.length} skipped=${built.skippedRows.length}`);
+        console.log(`  [dry] ${name.padEnd(40)} stage=${built.stage} rows=${built.observations.length} skipped=${built.skippedRowsTotal}`);
         obs += built.observations.length;
         continue;
       }

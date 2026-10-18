@@ -321,11 +321,11 @@ function parseContainerListRows(rows, det) {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row) continue;
+    if (isBlankRow(row)) continue;
 
     const trackingRaw = row[C.TRACKING];
     const phoneRaw    = row[C.PHONE];
-    // Title row, totals row, and blank rows have neither a tracking nor a phone.
+    // Title and totals rows have neither a tracking nor a phone.
     if (!trackingRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
 
     const waybills = splitWaybills(trackingRaw);
@@ -396,18 +396,59 @@ function parseContainerListRows(rows, det) {
   return { items, skippedRows };
 }
 
+// ─── Sheet reading helpers ────────────────────────────────────────────────────
+
+// Most skipped row numbers stored per file. The full count is kept separately
+// as skippedRowsTotal.
+const SKIPPED_ROWS_CAP = 1000;
+
+function isBlankCell(v) {
+  return v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+}
+
+function isBlankRow(row) {
+  return !row || row.every(isBlankCell);
+}
+
+// Read the sheet as an array of row arrays, stopping at the last row and column
+// that hold a value. Excel often reports a used range far past the real data
+// (formatting dragged down to row 1,048,576), and reading that range in full
+// yields a million blank rows and takes seconds.
+function readSheetRows(ws) {
+  if (!ws || !ws["!ref"]) return [];
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+
+  let lastRow = -1;
+  let lastCol = -1;
+  for (const key of Object.keys(ws)) {
+    if (key[0] === "!") continue;
+    const cell = ws[key];
+    if (!cell || isBlankCell(cell.v)) continue;
+    const { r, c } = XLSX.utils.decode_cell(key);
+    if (r < range.s.r || r > range.e.r || c < range.s.c || c > range.e.c) continue;
+    if (r > lastRow) lastRow = r;
+    if (c > lastCol) lastCol = c;
+  }
+  if (lastRow === -1) return [];
+
+  range.e.r = lastRow;
+  range.e.c = lastCol;
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, range });
+}
+
 // ─── Unified sheet parser ─────────────────────────────────────────────────────
 //
 // Single entry point for all three spreadsheet variants.
-// Returns { stage, metadata, items, skippedRows, headerWarnings, missingColumns }.
+// Returns { stage, metadata, items, skippedRows, skippedRowsTotal, headerWarnings, missingColumns }.
+// skippedRows holds at most SKIPPED_ROWS_CAP row numbers; skippedRowsTotal is the full count.
 
 function parseUnifiedSheet(buffer) {
   const wb   = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const ws   = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  const rows = readSheetRows(ws);
 
   if (!rows.length) {
-    return { stage: null, metadata: {}, items: [], skippedRows: [], headerWarnings: [], missingColumns: ["TRACKING_NO"] };
+    return { stage: null, metadata: {}, items: [], skippedRows: [], skippedRowsTotal: 0, headerWarnings: [], missingColumns: ["TRACKING_NO"] };
   }
 
   // ── 1. Metadata block: rows 0-9, label in col A, value in col B ──────────
@@ -436,7 +477,7 @@ function parseUnifiedSheet(buffer) {
   let headerRowIdx = -1;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (!row) continue;
+    if (isBlankRow(row)) continue;
     for (const cell of row) {
       if (cell !== null && cell !== undefined &&
           TRACKING_ALIASES_SET.has(normalizeHeaderCell(String(cell)))) {
@@ -543,7 +584,7 @@ function parseUnifiedSheet(buffer) {
     // Legacy positional intake: col 0=invoiceNo, 1=waybill, 2=phone, 3=qty, 4=date
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      if (!row) continue;
+      if (isBlankRow(row)) continue;
       const [invoiceRaw, waybillRaw, phoneRaw, qtyRaw, dateRaw] = row;
       if (!waybillRaw && !phoneRaw) { skippedRows.push(i + 1); continue; }
       const waybills = splitWaybills(waybillRaw);
@@ -576,7 +617,7 @@ function parseUnifiedSheet(buffer) {
 
     for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const row = rows[i];
-      if (!row) continue;
+      if (isBlankRow(row)) continue;
 
       const trackingRaw = get(row, "TRACKING_NO");
       const phoneRaw    = get(row, "CONTACT");
@@ -683,7 +724,12 @@ function parseUnifiedSheet(buffer) {
     }
   }
 
-  return { stage, metadata, items, skippedRows, headerWarnings, missingColumns };
+  return {
+    stage, metadata, items,
+    skippedRows: skippedRows.slice(0, SKIPPED_ROWS_CAP),
+    skippedRowsTotal: skippedRows.length,
+    headerWarnings, missingColumns,
+  };
 }
 
 // ─── Thin wrapper parsers (keep exported names, assert stage) ─────────────────
@@ -1452,7 +1498,7 @@ async function retractBatch(batchId, { force = false } = {}) {
 async function validateBatch(buffer, options = {}) {
   const { autoHold = false } = options;
   const parsed = parseUnifiedSheet(buffer);
-  const { stage, metadata, items, skippedRows, headerWarnings, missingColumns } = parsed;
+  const { stage, metadata, items, skippedRows, skippedRowsTotal, headerWarnings, missingColumns } = parsed;
 
   const waybills = [...new Set(items.map((i) => i.waybillNo).filter(Boolean))];
 
@@ -1514,7 +1560,7 @@ async function validateBatch(buffer, options = {}) {
     needsPhone,
     sharedWaybills,
     totalRows:   items.length,
-    skippedRows: skippedRows.length,
+    skippedRows: skippedRowsTotal,
   };
 }
 
