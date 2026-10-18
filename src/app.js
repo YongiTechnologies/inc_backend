@@ -29,7 +29,8 @@ require("./config/passport");
 
 const app = express();
 
-// Trust Render's reverse proxy so req.ip is the real client IP
+// Trust one proxy hop so req.ip is the client (netlify/functions/api.js sets
+// X-Forwarded-For to the address Netlify reports)
 app.set("trust proxy", 1);
 
 // ─── Security ─────────────────────────────────────────────────────────────────
@@ -119,7 +120,12 @@ app.use("/api",          containerRoutes);
 app.use("/api",          settingsRoutes);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
-app.get("/health", (req, res) => res.json({ status: "ok", ts: new Date().toISOString() }));
+// Also under /api so it is reachable through the frontend's /api proxy. `ip` is
+// the caller's own address as the rate limiters see it: if it shows a Netlify
+// address instead of yours, every user shares one rate-limit bucket.
+const health = (req, res) => res.json({ status: "ok", ts: new Date().toISOString(), ip: req.ip });
+app.get("/health", health);
+app.get("/api/health", health);
 
 // ─── 404 ──────────────────────────────────────────────────────────────────────
 app.use((req, res) => respond(res, 404, false, `${req.method} ${req.path} not found`));
