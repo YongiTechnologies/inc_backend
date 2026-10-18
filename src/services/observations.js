@@ -80,7 +80,8 @@ function eventDateOf(stage, item, metadata) {
  *                                        observation so derivation has a
  *                                        deterministic recency order
  * @returns {{ sourceFile: object, observations: object[],
- *             stage: string, skippedRows: number[],
+ *             stage: string, skippedRows: number[] (capped),
+ *             skippedRowsTotal: number,
  *             headerWarnings: string[], missingColumns: string[] }}
  */
 function buildObservations(buffer, opts = {}) {
@@ -99,6 +100,7 @@ function buildObservations(buffer, opts = {}) {
     metadata: parsed.metadata,
     rowCount: parsed.items.length,
     skippedRows: parsed.skippedRows,
+    skippedRowsTotal: parsed.skippedRowsTotal,
     status: "active",
   };  // contentHash is filled in below, once observations are built.
 
@@ -184,6 +186,7 @@ function buildObservations(buffer, opts = {}) {
     observations,
     stage,
     skippedRows: parsed.skippedRows,
+    skippedRowsTotal: parsed.skippedRowsTotal,
     headerWarnings: parsed.headerWarnings,
     missingColumns: parsed.missingColumns,
   };
