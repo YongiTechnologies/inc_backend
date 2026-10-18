@@ -8,6 +8,12 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # Netlify's secrets scan fails the build when a variable marked secret has a
+  # value that also appears in the repo. These are plain settings written in
+  # the docs and code (inc_logistics, production, the site URLs), not secrets.
+  # The real secrets (MONGODB_URI, JWT_*, GOOGLE_CLIENT_SECRET, ...) are still
+  # scanned.
+  SECRETS_SCAN_OMIT_KEYS = "DB_NAME,NODE_ENV,FRONTEND_URL,GOOGLE_CALLBACK_URL,ALLOWED_ORIGINS,JWT_EXPIRES_IN,GPS_PROVIDER,EMAIL_FROM,CONTACT_EMAIL,GOOGLE_CLIENT_ID"
 
 [functions]
   # swagger-jsdoc reads the route files at runtime for the API docs.
