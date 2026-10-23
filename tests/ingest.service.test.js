@@ -37,7 +37,7 @@ function mockMakeCollection() {
     then: (res) => Promise.resolve(rows).then(res),
     distinct: (field) => Promise.resolve([...new Set(rows.map((r) => r[field]))]),
   });
-  return {
+  const coll = {
     _docs: docs,
     find: (filter = {}) => chain(docs.filter((d) => mockMatch(d, filter))),
     findOne: (filter = {}) => {
@@ -68,7 +68,16 @@ function mockMakeCollection() {
       return { deletedCount: n };
     },
     countDocuments: async (filter = {}) => docs.filter((d) => mockMatch(d, filter)).length,
+    bulkWrite: async (ops) => {
+      let deletedCount = 0;
+      for (const op of ops) {
+        if (op.deleteMany) deletedCount += (await coll.deleteMany(op.deleteMany.filter)).deletedCount;
+        else if (op.updateOne) await coll.updateOne(op.updateOne.filter, op.updateOne.update, { upsert: op.updateOne.upsert });
+      }
+      return { deletedCount };
+    },
   };
+  return coll;
 }
 
 const mockSourceFile       = mockMakeCollection();
@@ -191,5 +200,31 @@ describe("ingest.service", () => {
 
     await ingest.rederiveWaybills([p0.waybill]);
     expect(find().status).toBe("ready_for_pickup"); // not regressed to the derived base
+  });
+
+  test("links a parcel to the registered customer whose phone ends the same", async () => {
+    await ingest.ingestFile(buf(GR31), { filename: GR31 });
+    const p = mockParcel._docs.find((x) => x.customerPhone);
+    mockUser._docs.push({ _id: "u-ama", phone: "0" + String(p.customerPhone).slice(-9) });
+
+    await ingest.rederiveWaybills([p.waybill]);
+    expect(p.customerId).toBe("u-ama");
+  });
+
+  test("re-deriving writes in one batch, with no per-parcel queries", async () => {
+    await ingest.ingestFile(buf(GR31), { filename: GR31 });
+    await ingest.ingestFile(buf(N201), { filename: N201 });
+    const calls = { bulk: 0, userFindOne: 0 };
+    const spy = (obj, name, key) => { const orig = obj[name]; obj[name] = (...a) => { calls[key]++; return orig(...a); }; return () => { obj[name] = orig; }; };
+    const undo = [spy(mockParcel, "bulkWrite", "bulk"), spy(mockUser, "findOne", "userFindOne")];
+    try {
+      const waybills = [...new Set(mockParcel._docs.map((x) => x.waybill))];
+      const before = snapshot();
+      const r = await ingest.rederiveWaybills(waybills);
+      expect(r.parcelsWritten).toBe(mockParcel._docs.length);
+      expect(snapshot()).toBe(before);   // same parcels as before
+      expect(calls.bulk).toBe(1);        // one write command for every waybill
+      expect(calls.userFindOne).toBe(0); // no per-parcel customer lookups
+    } finally { undo.forEach((u) => u()); }
   });
 });

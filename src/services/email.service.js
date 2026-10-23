@@ -94,7 +94,7 @@ async function sendPasswordChanged({ to, name }) {
   });
 }
 
-async function sendEmail({ to, subject, html }) {
+async function sendEmail({ to, subject, html, replyTo }) {
   if (!process.env.SMTP_USER) {
     console.warn("[Email] SMTP_USER not configured — skipping email send");
     return;
@@ -104,6 +104,7 @@ async function sendEmail({ to, subject, html }) {
     to,
     subject,
     html,
+    ...(replyTo ? { replyTo } : {}),
   });
 }
 

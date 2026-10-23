@@ -2,6 +2,9 @@ node_modules
 npm-debug.log*
 .env
 .env.*
+**/.env
+db.txt
+_db-backups
 .git
 .gitignore
 .github

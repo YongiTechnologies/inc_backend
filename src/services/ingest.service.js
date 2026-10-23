@@ -78,18 +78,40 @@ function applyAdjustment(parcel, adj) {
 }
 
 /**
+ * Registered customers by the last 9 digits of their phone, loaded once per
+ * re-derive. The first match wins, as resolveCustomerId's findOne did.
+ */
+async function loadCustomerIndex() {
+  const users = await User.find({ phone: { $ne: null } }, { phone: 1 }).lean();
+  const byLast9 = new Map();
+  for (const u of users) {
+    const key = String(u.phone || "").slice(-9);
+    if (key && !byLast9.has(key)) byLast9.set(key, u._id);
+  }
+  return byLast9;
+}
+
+/**
  * Recompute and persist every Parcel on the given waybills from their current
  * active observations. Parcels no longer supported by any observation are
  * removed. Safe to call repeatedly.
+ *
+ * Reads are three queries and writes are one bulkWrite, however many parcels
+ * there are. It used to be a query per waybill plus two per parcel, run one at
+ * a time: on Netlify's 10-second function limit a large sheet was cut off
+ * part-way, leaving the sheet active but many parcels never written.
  */
 async function rederiveWaybills(waybills) {
   const uniq = [...new Set((waybills || []).filter(Boolean))];
   if (!uniq.length) return { waybillsRederived: 0, parcelsWritten: 0, parcelsRemoved: 0 };
 
-  const obs = await Observation.find({ waybill: { $in: uniq }, active: true }).lean();
+  const [obs, adjustments, customers] = await Promise.all([
+    Observation.find({ waybill: { $in: uniq }, active: true }).lean(),
+    ManualAdjustment.find({ waybill: { $in: uniq } }).lean(),
+    loadCustomerIndex(),
+  ]);
   const derived = deriveParcels(obs);
 
-  const adjustments = await ManualAdjustment.find({ waybill: { $in: uniq } }).lean();
   const adjByKey = new Map();
   for (const a of adjustments) adjByKey.set(`${a.waybill}|${a.customerKey}`, a); // latest wins (sorted by _id asc)
 
@@ -99,27 +121,22 @@ async function rederiveWaybills(waybills) {
     derivedByWaybill.get(p.waybill).push(p);
   }
 
-  let written = 0, removed = 0;
+  // All deletes, then all upserts, so the driver sends two batched commands.
+  const deletes = [];
+  const upserts = [];
+  const derivedAt = new Date();
   for (const w of uniq) {
     const ps = derivedByWaybill.get(w) || [];
-    const keepKeys = ps.map((p) => p.customerKey);
-
-    const del = await Parcel.deleteMany({ waybill: w, customerKey: { $nin: keepKeys } });
-    removed += del.deletedCount || 0;
-
+    deletes.push({ deleteMany: { filter: { waybill: w, customerKey: { $nin: ps.map((p) => p.customerKey) } } } });
     for (const p of ps) {
       applyAdjustment(p, adjByKey.get(`${p.waybill}|${p.customerKey}`));
-      p.customerId = await resolveCustomerId(p.customerPhone);
-      p.derivedAt = new Date();
-      await Parcel.updateOne(
-        { waybill: p.waybill, customerKey: p.customerKey },
-        { $set: p },
-        { upsert: true }
-      );
-      written++;
+      p.customerId = (p.customerPhone && customers.get(String(p.customerPhone).slice(-9))) || null;
+      p.derivedAt = derivedAt;
+      upserts.push({ updateOne: { filter: { waybill: p.waybill, customerKey: p.customerKey }, update: { $set: p }, upsert: true } });
     }
   }
-  return { waybillsRederived: uniq.length, parcelsWritten: written, parcelsRemoved: removed };
+  const result = await Parcel.bulkWrite([...deletes, ...upserts], { ordered: true });
+  return { waybillsRederived: uniq.length, parcelsWritten: upserts.length, parcelsRemoved: result.deletedCount || 0 };
 }
 
 /**

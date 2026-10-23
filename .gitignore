@@ -7,3 +7,13 @@ INTEGRATION.md
 .claude
 # Revert files from backfill-customer-key
 backfill-backup-*.json
+
+# Live DB credential — never commit
+db.txt
+
+# Hetzner deploy secrets + local backups
+deploy/hetzner/.env
+deploy/hetzner/SERVER.md
+deploy/hetzner/CONNECTION*.md
+deploy/hetzner/backups/
+_db-backups/
