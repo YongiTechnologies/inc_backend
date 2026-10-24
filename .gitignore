@@ -18,5 +18,6 @@ deploy/hetzner/CONNECTION*.md
 deploy/hetzner/backups/
 _db-backups/
 
-# Markdown files stay on this machine; they are not committed
+# Markdown files stay on this machine and are not committed, except the README
 *.md
+!/README.md
