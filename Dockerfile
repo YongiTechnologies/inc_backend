@@ -1,5 +1,5 @@
 # Image for running the API as a normal long-lived server (node server.js),
-# used by deploy/hetzner/docker-compose.yml. Netlify does not use this file.
+# used by deploy/hetzner/docker-compose.yml.
 FROM node:22-alpine
 
 WORKDIR /app

@@ -12,8 +12,7 @@
 {$API_DOMAIN} {
 	encode zstd gzip
 
-	# Spreadsheet uploads. multer caps a file at 10 MB; leave headroom. The old
-	# Netlify 6 MB request limit no longer applies here.
+	# Spreadsheet uploads. multer caps a file at 10 MB; leave headroom.
 	request_body {
 		max_size 12MB
 	}
@@ -26,7 +25,7 @@
 
 # The website. /api/* is routed to the API in-house, so the browser only ever
 # talks to this one domain: sign-in cookies stay first-party and no CORS is
-# needed (the same layout Netlify's /api proxy gave before).
+# needed.
 # $WEB_DOMAIN is the site's own domain (clinetteshipping.com since cutover).
 {$WEB_DOMAIN:localhost} {
 	encode zstd gzip

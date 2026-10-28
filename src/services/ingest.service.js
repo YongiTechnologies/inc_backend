@@ -98,8 +98,8 @@ async function loadCustomerIndex() {
  *
  * Reads are three queries and writes are one bulkWrite, however many parcels
  * there are. It used to be a query per waybill plus two per parcel, run one at
- * a time: on Netlify's 10-second function limit a large sheet was cut off
- * part-way, leaving the sheet active but many parcels never written.
+ * a time: under the old hosting's 10-second request limit a large sheet was cut
+ * off part-way, leaving the sheet active but many parcels never written.
  */
 async function rederiveWaybills(waybills) {
   const uniq = [...new Set((waybills || []).filter(Boolean))];
