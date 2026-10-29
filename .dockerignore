@@ -5,6 +5,7 @@ npm-debug.log*
 **/.env
 db.txt
 _db-backups
+backups
 .git
 .gitignore
 .github
