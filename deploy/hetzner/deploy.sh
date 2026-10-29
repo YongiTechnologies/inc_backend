@@ -7,7 +7,8 @@
 #   /opt/inc-logistics/deploy/hetzner/deploy.sh
 #
 #   1. Back up the database (skip with SKIP_BACKUP=1).
-#   2. Move both checkouts to the tip of origin/dev.
+#   2. Move both checkouts to the tip of origin/dev, then carry on with the
+#      copy of this script just pulled, so a change to it applies at once.
 #   3. Build the api and web images. A failed build leaves the site as it was.
 #   4. Start the new containers and wait for api, web and the site through
 #      Caddy to answer.
@@ -29,25 +30,19 @@ sync_repo() {
   git -C "$1" reset -q --hard FETCH_HEAD
 }
 
-# Tag the image each container is running as :previous, so a bad release can
-# be undone without a rebuild.
-keep_running_images() {
-  local svc id
+# Point inc-logistics-{api,web}:<to> at the image tagged :<from>. The image
+# store deletes an image as soon as its last tag moves, so the running images
+# must be tagged :previous before a build moves :latest.
+tag_images() {
+  local svc
   for svc in api web; do
-    id="$(docker compose ps -aq "$svc")"
-    if [ -n "$id" ]; then
-      docker tag "$(docker inspect --format '{{.Image}}' "$id")" "inc-logistics-$svc:previous"
-    fi
+    docker tag "inc-logistics-$svc:$1" "inc-logistics-$svc:$2"
   done
 }
 
-restore_previous_images() {
-  local svc
-  for svc in api web; do
-    if docker image inspect "inc-logistics-$svc:previous" >/dev/null 2>&1; then
-      docker tag "inc-logistics-$svc:previous" "inc-logistics-$svc:latest"
-    fi
-  done
+restore_code() {
+  git -C "$BACKEND" reset -q --hard "$DEPLOY_PREV_BACKEND"
+  git -C "$FRONTEND" reset -q --hard "$DEPLOY_PREV_FRONTEND"
 }
 
 # True once api and web answer inside their containers and the site answers
@@ -65,38 +60,42 @@ healthy() {
 }
 
 main() {
-  exec 9>/tmp/inc-logistics-deploy.lock
-  flock -w 1800 9 || { log "another deploy is still running; giving up"; exit 1; }
-
   cd "$BACKEND/deploy/hetzner"
 
-  if [ "${SKIP_BACKUP:-0}" != 1 ]; then
-    log "backing up the database"
-    ./backup.sh
+  # First pass, in whichever copy of this script was on disk: lock, back up,
+  # update both checkouts, then start again in the copy just pulled.
+  if [ -z "${DEPLOY_PREV_BACKEND:-}" ]; then
+    exec 9>/tmp/inc-logistics-deploy.lock
+    flock -w 1800 9 || { log "another deploy is still running; giving up"; exit 1; }
+    if [ "${SKIP_BACKUP:-0}" != 1 ]; then
+      log "backing up the database"
+      ./backup.sh
+    fi
+    DEPLOY_PREV_BACKEND="$(git -C "$BACKEND" rev-parse HEAD)"
+    DEPLOY_PREV_FRONTEND="$(git -C "$FRONTEND" rev-parse HEAD)"
+    DEPLOY_PREV_CADDY="$(sha256sum Caddyfile)"
+    export DEPLOY_PREV_BACKEND DEPLOY_PREV_FRONTEND DEPLOY_PREV_CADDY
+    sync_repo "$BACKEND"
+    sync_repo "$FRONTEND"
+    exec bash "$BACKEND/deploy/hetzner/deploy.sh"   # the lock on fd 9 carries over
   fi
 
-  local old_back old_front old_caddy caddy_changed=0
-  old_back="$(git -C "$BACKEND" rev-parse HEAD)"
-  old_front="$(git -C "$FRONTEND" rev-parse HEAD)"
-  old_caddy="$(sha256sum Caddyfile)"
-
-  sync_repo "$BACKEND"
-  sync_repo "$FRONTEND"
-  log "backend:  $(git -C "$BACKEND" log -1 --format='%h %s')"
-  log "frontend: $(git -C "$FRONTEND" log -1 --format='%h %s')"
   # Caddy reads its file through a bind mount, which only follows a replaced
   # file after a restart.
-  [ "$old_caddy" = "$(sha256sum Caddyfile)" ] || caddy_changed=1
+  local caddy_changed=0
+  [ "$DEPLOY_PREV_CADDY" = "$(sha256sum Caddyfile)" ] || caddy_changed=1
+  log "backend:  $(git -C "$BACKEND" log -1 --format='%h %s')"
+  log "frontend: $(git -C "$FRONTEND" log -1 --format='%h %s')"
 
+  tag_images latest previous
   log "building"
   if ! docker compose build api web; then
     log "build failed; the site is still running the previous version"
-    git -C "$BACKEND" reset -q --hard "$old_back"
-    git -C "$FRONTEND" reset -q --hard "$old_front"
+    tag_images previous latest
+    restore_code
     exit 1
   fi
 
-  keep_running_images
   log "starting the new version"
   docker compose up -d --no-build
   [ "$caddy_changed" = 0 ] || docker compose restart caddy
@@ -109,9 +108,8 @@ main() {
 
   log "the new version did not come up healthy; rolling back"
   docker compose logs --no-color --tail 40 api web || true
-  restore_previous_images
-  git -C "$BACKEND" reset -q --hard "$old_back"
-  git -C "$FRONTEND" reset -q --hard "$old_front"
+  tag_images previous latest
+  restore_code
   docker compose up -d --no-build
   [ "$caddy_changed" = 0 ] || docker compose restart caddy
   if healthy; then
