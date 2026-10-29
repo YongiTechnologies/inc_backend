@@ -13,12 +13,13 @@
 # deploy.sh runs it with BACKUP_NAME=pre-deploy: that archive replaces the
 # previous one each time and stays on this server.
 #
-# Restore one with:
-#   gunzip -c inc_logistics-STAMP.archive.gz | \
-#     docker compose exec -T mongo sh -c \
-#       'mongorestore --username "$MONGO_INITDB_ROOT_USERNAME" \
-#          --password "$MONGO_INITDB_ROOT_PASSWORD" \
-#          --authenticationDatabase admin --archive --gzip --drop'
+# Restore one (replaces the live database). The archive is gzipped as a whole
+# and --gzip reads it as it is; piping it through gunzip first breaks that.
+#   docker compose exec -T mongo sh -c \
+#     'mongorestore --username "$MONGO_INITDB_ROOT_USERNAME" \
+#        --password "$MONGO_INITDB_ROOT_PASSWORD" \
+#        --authenticationDatabase admin --archive --gzip --drop' \
+#     < /opt/inc-logistics/backups/inc_logistics-pre-deploy.archive.gz
 #
 # Install (as the deploy user):
 #   crontab -e
