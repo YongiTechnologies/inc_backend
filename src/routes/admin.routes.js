@@ -271,6 +271,82 @@ router.patch("/users/:id", authenticate, authorize("admin"), ctrl.updateUser);
 
 /**
  * @swagger
+ * /admin/users/{id}/reset-password:
+ *   post:
+ *     summary: Reset a user's password (admin only)
+ *     description: >
+ *       Sets a new password and ends all of the user's sessions. Send a
+ *       `password` to choose it, or leave it out to have a 10-character
+ *       temporary password generated; that one is returned once as
+ *       `temporaryPassword`.
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *     responses:
+ *       200:
+ *         description: Password reset
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Password reset
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     temporaryPassword:
+ *                       type: string
+ *                       example: Hk7mPq2xRt
+ *       400:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error400'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error401'
+ *       403:
+ *         description: Forbidden - admin role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error403'
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error404'
+ */
+router.post("/users/:id/reset-password", authenticate, authorize("admin"), ctrl.resetPassword);
+
+/**
+ * @swagger
  * /admin/audit-logs:
  *   get:
  *     tags:

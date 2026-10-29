@@ -1,0 +1,5 @@
+# The server runs these as-is: keep LF endings even on a Windows checkout
+# (with CRLF, bash fails on the backup script).
+*.sh                 text eol=lf
+deploy/hetzner/**    text eol=lf
+Dockerfile           text eol=lf

@@ -1,5 +1,7 @@
+const crypto = require("crypto");
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog");
+const RefreshToken = require("../models/RefreshToken");
 const audit = require("../services/audit.service");
 const { respond } = require("../utils/response");
 const { escapeRegex, validate } = require("../utils/validators");
@@ -139,6 +141,57 @@ async function updateUser(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// Easy to read out over the phone: no look-alike characters (0/O, 1/l/I).
+const TEMP_PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+
+function generateTempPassword(length = 10) {
+  let out = "";
+  for (let i = 0; i < length; i++) out += TEMP_PASSWORD_ALPHABET[crypto.randomInt(TEMP_PASSWORD_ALPHABET.length)];
+  return out;
+}
+
+// POST /api/admin/users/:id/reset-password
+// The only way a forgotten password gets reset: an admin sets a new one, or
+// leaves it out to have a temporary one generated and returned once. Every
+// session the user had is ended, so only the new password works.
+async function resetPassword(req, res, next) {
+  try {
+    const schema = Joi.object({ password: Joi.string().min(8).optional() });
+    const { error, value } = schema.validate(req.body || {}, { abortEarly: false });
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: error.details.map((d) => d.message),
+      });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return respond(res, 404, false, "User not found");
+
+    const generated = !value.password;
+    const password  = value.password || generateTempPassword();
+    user.password = password;   // hashed by the User pre-save hook
+    user.provider = "local";    // a former Google-only account can now sign in normally
+    await user.save();
+
+    await RefreshToken.deleteMany({ userId: user._id });
+
+    await audit.log({
+      performedBy: req.user._id,
+      action:      "RESET_PASSWORD",
+      targetModel: "User",
+      targetId:    user._id,
+      details:     { generated },
+      ip:          req.ip,
+    });
+
+    // A generated password goes back once so the admin can pass it on; a typed
+    // one is never echoed.
+    return respond(res, 200, true, "Password reset", generated ? { temporaryPassword: password } : {});
+  } catch (err) { next(err); }
+}
+
 async function getAuditLogs(req, res, next) {
   try {
     const { page = 1, limit = 50 } = req.query;
@@ -157,4 +210,4 @@ async function getAuditLogs(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { listUsers, createUser, updateUser, getAuditLogs };
+module.exports = { listUsers, createUser, updateUser, resetPassword, getAuditLogs, generateTempPassword };

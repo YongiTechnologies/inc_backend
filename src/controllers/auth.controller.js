@@ -254,6 +254,8 @@ async function issueSession(user, req, res) {
 
 // POST /api/auth/phone-check
 // Returns whether the phone has an account and whether a password is set.
+// Deliberately not the account holder's name: this endpoint is public, and
+// returning it let anyone look up who owns a phone number.
 async function phoneCheck(req, res, next) {
   try {
     const { phone } = req.body;
@@ -267,7 +269,6 @@ async function phoneCheck(req, res, next) {
     return respond(res, 200, true, "Account found", {
       exists: true,
       hasPassword: !!user.password,
-      name: user.name,
     });
   } catch (err) { next(err); }
 }
@@ -292,26 +293,14 @@ async function phoneLogin(req, res, next) {
 }
 
 // POST /api/auth/phone-set-password
-// Called when a user exists but has no password (e.g. staff-created account or
-// account created before password was required). Sets the password and logs in.
-async function phoneSetPassword(req, res, next) {
-  try {
-    const { phone, name, password } = req.body;
-    if (!phone || !password) return respond(res, 400, false, "Phone and password are required");
-    if (password.length < 8) return respond(res, 400, false, "Password must be at least 8 characters");
-    const { normalised, user } = await findUserByPhoneNormalised(phone);
-    if (!normalised) return respond(res, 400, false, "Invalid phone number");
-    if (!user) return respond(res, 404, false, "No account found for this number");
-    if (user.password) return respond(res, 409, false, "Account already has a password. Please log in normally.");
-
-    if (name && name.trim()) user.name = name.trim();
-    user.password = password;
-    await user.save();
-
-    const session = await issueSession(user, req, res);
-    await audit.log({ performedBy: user._id, action: "PASSWORD_RESET", ip: req.ip });
-    return respond(res, 200, true, "Password set. Logged in.", session);
-  } catch (err) { next(err); }
+// Disabled. It set the password of any password-less account given only its
+// phone number, with no proof the caller owned that phone — anyone who knew a
+// customer's number could take the account over. An admin now sets the password
+// instead (POST /api/admin/users/:id/reset-password). Kept as a route so older
+// clients get a clear answer rather than a 404.
+async function phoneSetPassword(req, res) {
+  return respond(res, 403, false,
+    "This account doesn't have a password yet. Please contact us and we'll set one up for you.");
 }
 
 // POST /api/auth/phone-signup

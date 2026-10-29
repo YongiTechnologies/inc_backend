@@ -1,0 +1,51 @@
+# Automatic HTTPS for the API. Caddy obtains and renews a Let's Encrypt
+# certificate for $API_DOMAIN on its own, as long as:
+#   - a DNS A record points $API_DOMAIN at this server's public IP, and
+#   - ports 80 and 443 are open to the internet.
+#
+# $API_DOMAIN and $ACME_EMAIL are injected from deploy/hetzner/.env via compose.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Spreadsheet uploads. multer caps a file at 10 MB; leave headroom.
+	request_body {
+		max_size 12MB
+	}
+
+	# One proxy hop in front of Express (app sets "trust proxy 1"). Caddy adds
+	# X-Forwarded-For/Proto/Host by default, so req.ip is the real client and the
+	# per-IP rate limiters work correctly.
+	reverse_proxy api:5000
+}
+
+# The website. /api/* is routed to the API in-house, so the browser only ever
+# talks to this one domain: sign-in cookies stay first-party and no CORS is
+# needed.
+# $WEB_DOMAIN is the site's own domain (clinetteshipping.com since cutover).
+{$WEB_DOMAIN:localhost} {
+	encode zstd gzip
+
+	request_body {
+		max_size 12MB
+	}
+
+	handle /api/* {
+		reverse_proxy api:5000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
+
+# Other names for the site (www, the old preview host) redirect to it, keeping
+# the path. $WEB_ALIASES is a space-separated list; each needs its own DNS
+# record pointing here so Caddy can get a certificate for it.
+{$WEB_ALIASES} {
+	redir https://{$WEB_DOMAIN}{uri} permanent
+}

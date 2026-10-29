@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
 
-// A serverless function instance handles many requests in a row while it is
-// warm, so the connection is opened once and shared. Concurrent cold-start
-// requests all wait on the same promise instead of opening one pool each.
+// The connection is opened once and shared. Concurrent callers all wait on the
+// same promise instead of opening one pool each.
 let connecting = null;
 
 async function connectDB() {
@@ -15,7 +14,7 @@ async function connectDB() {
   connecting = mongoose
     .connect(uri, {
       dbName: process.env.DB_NAME || "inc_logistics",
-      // Fail fast: a function has seconds, not minutes, to answer.
+      // Fail fast rather than hang when the database is unreachable.
       serverSelectionTimeoutMS: 5000,
     })
     .then(() => {

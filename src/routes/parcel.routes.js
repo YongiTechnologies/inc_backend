@@ -13,7 +13,7 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if ([".xlsx", ".xls"].includes(ext)) return cb(null, true);
-    cb(new Error("Only .xlsx and .xls files are accepted"), false);
+    cb(Object.assign(new Error("Only .xlsx and .xls files are accepted"), { statusCode: 400 }), false);
   },
 });
 

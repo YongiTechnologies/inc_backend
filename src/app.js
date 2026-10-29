@@ -29,8 +29,8 @@ require("./config/passport");
 
 const app = express();
 
-// Trust one proxy hop so req.ip is the client (netlify/functions/api.js sets
-// X-Forwarded-For to the address Netlify reports)
+// Trust one proxy hop (Caddy, see deploy/hetzner/Caddyfile) so req.ip is the
+// real client
 app.set("trust proxy", 1);
 
 // ─── Security ─────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ app.use("/api",          settingsRoutes);
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 // Also under /api so it is reachable through the frontend's /api proxy. `ip` is
-// the caller's own address as the rate limiters see it: if it shows a Netlify
+// the caller's own address as the rate limiters see it: if it shows a proxy's
 // address instead of yours, every user shares one rate-limit bucket.
 const health = (req, res) => res.json({ status: "ok", ts: new Date().toISOString(), ip: req.ip });
 app.get("/health", health);
