@@ -15,10 +15,18 @@
 # container via env_file.
 name: inc-logistics
 
+# Container logs: at most 3 files of 10 MB per service, so they can't fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    logging: *logging
     # The dataset is tiny (~6 MB); cap WiredTiger's cache so Mongo can't grow to
     # ~50% of RAM and crowd out Node/Caddy on a 4 GB box.
     command: ["--wiredTigerCacheSizeGB", "0.5"]
@@ -48,6 +56,7 @@ services:
       context: ../..
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *logging
     env_file: .env
     environment:
       NODE_ENV: production
@@ -74,6 +83,7 @@ services:
     build:
       context: ${FRONTEND_DIR:-../../../inc_frontend}
     restart: unless-stopped
+    logging: *logging
     expose: ["3000"]
     networks: [web]
     healthcheck:
@@ -86,6 +96,7 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    logging: *logging
     ports:
       - "80:80"
       - "443:443"

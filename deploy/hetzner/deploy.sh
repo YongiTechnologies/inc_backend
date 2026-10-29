@@ -6,13 +6,16 @@
 # by hand, as the deploy user:
 #   /opt/inc-logistics/deploy/hetzner/deploy.sh
 #
-#   1. Back up the database (skip with SKIP_BACKUP=1).
+#   1. Back up the database, replacing the previous pre-deploy backup (skip
+#      with SKIP_BACKUP=1).
 #   2. Move both checkouts to the tip of origin/dev, then carry on with the
 #      copy of this script just pulled, so a change to it applies at once.
 #   3. Build the api and web images. A failed build leaves the site as it was.
 #   4. Start the new containers and wait for api, web and the site through
 #      Caddy to answer.
 #   5. If they don't, put the previous images and code back, and fail.
+#   6. Otherwise trim Docker's build cache to BUILD_CACHE_MAX, so builds stay
+#      fast without the cache filling the disk.
 #
 # One deploy runs at a time; a second one waits for the first to finish.
 set -euo pipefail
@@ -21,6 +24,7 @@ BRANCH=dev
 BACKEND=/opt/inc-logistics
 FRONTEND=/opt/inc_frontend
 HEALTH_TIMEOUT=180   # seconds
+BUILD_CACHE_MAX=2gb
 
 log() { echo "$(date -u +%FT%TZ)  $*"; }
 
@@ -69,7 +73,7 @@ main() {
     flock -w 1800 9 || { log "another deploy is still running; giving up"; exit 1; }
     if [ "${SKIP_BACKUP:-0}" != 1 ]; then
       log "backing up the database"
-      ./backup.sh
+      BACKUP_NAME=pre-deploy ./backup.sh
     fi
     DEPLOY_PREV_BACKEND="$(git -C "$BACKEND" rev-parse HEAD)"
     DEPLOY_PREV_FRONTEND="$(git -C "$FRONTEND" rev-parse HEAD)"
@@ -102,6 +106,7 @@ main() {
 
   if healthy; then
     docker image prune -f >/dev/null
+    docker builder prune -f --max-used-space "$BUILD_CACHE_MAX" >/dev/null
     log "deploy finished"
     return
   fi
